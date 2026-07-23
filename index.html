@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>注意力生命週期儀表板</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --border: #2a323d;
+    --text: #e6edf3;
+    --text-dim: #9aa7b4;
+    --text-faint: #6b7684;
+    --accent: #58a6ff;
+    --new: #3fb950;
+    --accel: #58a6ff;
+    --sat: #f0883e;
+    --fade: #8b949e;
+    --danger: #f85149;
+    --shadow: 0 8px 30px rgba(0,0,0,.35);
+    --radius: 12px;
+    font-synthesis: none;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa; --panel: #ffffff; --panel-2: #f1f4f8; --border: #d6dee6;
+      --text: #1f2933; --text-dim: #57636f; --text-faint: #8a949e;
+      --shadow: 0 6px 24px rgba(30,50,80,.10);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+      "PingFang TC", "Microsoft JhengHei", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 20px 60px; }
+
+  /* Header */
+  header.top {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  header.top h1 {
+    font-size: 20px; margin: 0; letter-spacing: .3px; font-weight: 700;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo-dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--new), var(--sat));
+    box-shadow: 0 0 12px rgba(240,136,62,.6);
+  }
+  .subtitle { color: var(--text-faint); font-size: 12.5px; margin: 2px 0 20px; }
+  .subtitle code { color: var(--text-dim); }
+  .controls { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .seg {
+    display: inline-flex; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 3px; gap: 2px;
+  }
+  .seg button {
+    border: 0; background: transparent; color: var(--text-dim); cursor: pointer;
+    padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    transition: all .15s;
+  }
+  .seg button.active { background: var(--accent); color: #fff; }
+  .btn {
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+    cursor: pointer; padding: 7px 14px; border-radius: 9px; font-size: 13px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 7px; transition: all .15s;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:active { transform: translateY(1px); }
+  .btn .spin { display: inline-block; }
+  .btn.loading .spin { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Alerts */
+  .alerts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+  @media (max-width: 720px) { .alerts { grid-template-columns: 1fr; } }
+  .alert-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .alert-card h3 { margin: 0 0 10px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+  .alert-card.new h3 { color: var(--new); }
+  .alert-card.sat h3 { color: var(--sat); }
+  .alert-card .count-badge {
+    margin-left: auto; font-size: 11px; font-weight: 700; padding: 1px 8px;
+    border-radius: 20px; background: var(--panel-2); color: var(--text-dim);
+  }
+  .alert-item {
+    display: flex; align-items: center; gap: 10px; padding: 7px 0;
+    border-top: 1px dashed var(--border); cursor: pointer;
+  }
+  .alert-item:first-of-type { border-top: 0; }
+  .alert-item:hover .a-ticker { color: var(--accent); }
+  .a-ticker { font-weight: 700; font-size: 14px; min-width: 62px; font-variant-numeric: tabular-nums; }
+  .a-note { font-size: 12.5px; color: var(--text-dim); }
+  .a-spark { margin-left: auto; }
+  .alert-empty { color: var(--text-faint); font-size: 12.5px; padding: 6px 0; }
+
+  /* Table */
+  .table-wrap {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  thead th {
+    text-align: right; font-size: 11.5px; font-weight: 600; letter-spacing: .3px;
+    color: var(--text-faint); padding: 12px 14px; cursor: pointer; user-select: none;
+    white-space: nowrap; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--panel); z-index: 1;
+  }
+  thead th:first-child, tbody td:first-child { text-align: left; }
+  thead th.sortable:hover { color: var(--text); }
+  thead th .arrow { opacity: .35; font-size: 9px; margin-left: 3px; }
+  thead th.sorted .arrow { opacity: 1; color: var(--accent); }
+  tbody td {
+    text-align: right; padding: 11px 14px; font-size: 13.5px; border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  tbody tr.row { cursor: pointer; transition: background .12s; }
+  tbody tr.row:hover { background: var(--panel-2); }
+  tbody tr:last-child td { border-bottom: 0; }
+  .tk { font-weight: 700; font-size: 14px; }
+  .tk small { display: block; font-weight: 400; font-size: 11px; color: var(--text-faint); }
+  .stage-pill {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 20px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .stage-New { background: rgba(63,185,80,.14); color: var(--new); }
+  .stage-Accelerating { background: rgba(88,166,255,.14); color: var(--accel); }
+  .stage-Saturated { background: rgba(240,136,62,.15); color: var(--sat); }
+  .stage-Fading { background: rgba(139,148,158,.16); color: var(--fade); }
+  .stage-Warming { background: rgba(210,168,255,.14); color: #b083f0; }
+  .warmup-banner {
+    background: rgba(210,168,255,.10); border: 1px solid rgba(210,168,255,.35);
+    color: #b083f0; border-radius: 10px; padding: 9px 14px; font-size: 12.5px;
+    margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+  }
+  .warmup-banner b { color: var(--text); }
+  .chg-pos { color: var(--new); }
+  .chg-neg { color: var(--danger); }
+  .flag-hot {
+    display: inline-block; margin-left: 6px; font-size: 10.5px; font-weight: 700;
+    color: var(--danger); border: 1px solid var(--danger); border-radius: 5px; padding: 0 5px;
+    vertical-align: middle;
+  }
+  .mini-spark { display: inline-block; vertical-align: middle; }
+
+  /* Detail panel */
+  tr.detail-row td { padding: 0; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+  .detail {
+    padding: 18px 18px 22px; display: grid; grid-template-columns: 1.6fr 1fr; gap: 22px;
+    animation: fade .25s ease;
+  }
+  @keyframes fade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+  @media (max-width: 760px) { .detail { grid-template-columns: 1fr; } }
+  .detail h4 { margin: 0 0 4px; font-size: 13px; color: var(--text-dim); font-weight: 600; }
+  .detail .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .legend { display: flex; gap: 16px; font-size: 11.5px; color: var(--text-dim); margin-top: 8px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+  .reason {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px;
+    font-size: 12.5px; margin-bottom: 14px;
+  }
+  .reason .r-title { font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .reason ul { margin: 0; padding-left: 18px; color: var(--text-dim); }
+  .reason li { margin: 3px 0; }
+  .reason b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .src-bars { display: flex; flex-direction: column; gap: 9px; }
+  .src-row { font-size: 12px; }
+  .src-row .src-head { display: flex; justify-content: space-between; margin-bottom: 3px; color: var(--text-dim); }
+  .src-track { height: 8px; background: var(--panel-2); border-radius: 6px; overflow: hidden; }
+  .src-fill { height: 100%; border-radius: 6px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-bottom: 14px; }
+  .metric {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  }
+  .metric .m-label { font-size: 11px; color: var(--text-faint); }
+  .metric .m-val { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+  footer { color: var(--text-faint); font-size: 11.5px; margin-top: 24px; line-height: 1.7; }
+  footer .disclaimer { color: var(--sat); font-weight: 600; }
+  .updated { font-size: 11.5px; color: var(--text-faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1><span class="logo-dot"></span>注意力生命週期儀表板</h1>
+    <div class="controls">
+      <div class="seg" id="sourceSeg">
+        <button data-src="live" class="active">即時</button>
+        <button data-src="mock">範例</button>
+      </div>
+      <div class="seg" id="windowSeg">
+        <button data-win="7" class="active">7 天</button>
+        <button data-win="30">30 天</button>
+      </div>
+      <button class="btn" id="refreshBtn">
+        <span class="spin">↻</span> 重新整理
+      </button>
+    </div>
+  </header>
+  <div class="subtitle">
+    追蹤每檔在群眾注意力曲線上的位置：🌱剛冒出 → 🚀加速 → 🥵飽和 → 📉退潮。
+    分類由第 7 節規則即時計算 · <span class="updated" id="modeBadge"></span>
+  </div>
+
+  <div class="warmup-banner" id="warmupBanner" style="display:none"></div>
+
+  <div class="alerts">
+    <div class="alert-card new">
+      <h3>🌱 新進榜警示 <span class="count-badge" id="newCount">0</span></h3>
+      <div id="newAlerts"></div>
+    </div>
+    <div class="alert-card sat">
+      <h3>🥵 飽和警示 <span class="count-badge" id="satCount">0</span></h3>
+      <div id="satAlerts"></div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr id="headRow">
+            <th class="sortable" data-key="ticker">標的 <span class="arrow">▾</span></th>
+            <th class="sortable" data-key="stageOrder">階段 <span class="arrow">▾</span></th>
+            <th class="sortable sorted" data-key="mentions7">提及(<span class="win-label">7</span>d) <span class="arrow">▾</span></th>
+            <th class="sortable" data-key="weekChange">週變化 <span class="arrow">▾</span></th>
+            <th class="sortable" data-key="daysAtHigh">高位天數 <span class="arrow">▾</span></th>
+            <th>迷你趨勢</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    <div class="disclaimer">⚠ 決策輔助儀表板，不是自動下單機。它浮出訊號，人做決定。非投資建議。</div>
+    <div>訊號會很吵，儀表板的價值是「提醒你去看」，不是「告訴你買」。注意力 ≠ 方向。門檻（X／threshold／N／D）為手調初值，須以樣本外回測校準。</div>
+  </footer>
+</div>
+
+<script>
+/* ============================================================================
+   注意力生命週期儀表板 — P0 原型
+   資料為 mock；分類邏輯依專案計畫第 7 節「規則版」實作，真的用資料算。
+   ============================================================================ */
+
+/* ---- 分類門檻（第 7 節手調初值） ---- */
+const CFG = {
+  NEW_JUMP_X: 5,        // New：最近 3 天 M 相對前期跳升倍數
+  NEW_QUIET_MAX: 0.06,  // New：過去期間提及幾乎為 0 的相對水位
+  ACCEL_THRESH: 0.15,   // Accelerating：ΔM% 門檻
+  FADE_THRESH: -0.15,   // Fading：ΔM% 門檻
+  TOP_N: 5,             // Saturated：前 N 名算「高位」
+  SAT_DAYS: 10,         // Saturated：高位停留天數門檻
+  DIVERGE_DAYS: 8,      // 背離：檢視價格是否已走平/反轉的視窗
+  MIN_OBS: 8            // 觀察天數不足此值 → 標記「暖身中」，不做四階段分類
+};
+
+const STAGE_META = {
+  New:          { icon: '🌱', label: '新',   order: 1 },
+  Accelerating: { icon: '🚀', label: '加速', order: 2 },
+  Saturated:    { icon: '🥵', label: '飽和', order: 3 },
+  Fading:       { icon: '📉', label: '退潮', order: 4 },
+  Warming:      { icon: '⏳', label: '暖身', order: 5 }
+};
+
+/* ---- Mock 資料生成：每檔設計一種軌跡形狀 + 雜訊 ---- */
+const UNIVERSE = [
+  { ticker: 'NVDA', name: 'NVIDIA',        shape: 'saturated', scale: 12000 },
+  { ticker: 'GLD',  name: 'SPDR Gold',     shape: 'saturated', scale: 6800  },
+  { ticker: 'TSLA', name: 'Tesla',         shape: 'fading',    scale: 9000  },
+  { ticker: 'PLTR', name: 'Palantir',      shape: 'accel',     scale: 5200  },
+  { ticker: 'SMCI', name: 'Super Micro',   shape: 'fading',    scale: 4300  },
+  { ticker: 'RGTI', name: 'Rigetti',       shape: 'new',       scale: 900   },
+  { ticker: 'ASTS', name: 'AST SpaceMobile',shape: 'accel',    scale: 3100  },
+  { ticker: 'MSTR', name: 'MicroStrategy', shape: 'saturated', scale: 5600  },
+  { ticker: 'SOFI', name: 'SoFi',          shape: 'accel',     scale: 2600  },
+  { ticker: 'HOOD', name: 'Robinhood',     shape: 'saturated', scale: 4100  },
+  { ticker: 'LUNR', name: 'Intuitive Mach.',shape: 'new',      scale: 1200  },
+  { ticker: 'AMD',  name: 'AMD',           shape: 'fading',    scale: 5400  },
+  { ticker: 'BBAI', name: 'BigBear.ai',    shape: 'new',       scale: 780   },
+  { ticker: 'COIN', name: 'Coinbase',      shape: 'accel',     scale: 4600  }
+];
+
+let DAYS = 30;                 // 資料天數（mock=30；live 由 data.json 的 dates 長度決定）
+let seedT = 0;                 // mock：每次 refresh 遞增，讓雜訊變動
+let MODE = 'mock';             // 'live'（讀 data.json）或 'mock'（P0 內建假資料）
+let HAS_PRICE = true;          // live（僅提及）沒有價格 → 關閉背離旗標與股價疊圖
+let GENERATED_AT = null;       // 資料產生時間
+let SRC_LIST = ['reddit', 'stocktwits', 'trends'];  // 來源鍵
+let SRC_LABEL = { reddit: 'Reddit (r/wallstreetbets)', stocktwits: 'StockTwits', trends: 'Google Trends' };
+const SRC_COLORS = ['var(--accent)', 'var(--new)', 'var(--sat)', '#a371f7', '#f778ba'];
+
+function noise(mag) { return 1 + (Math.random() - 0.5) * 2 * mag; }
+
+// 產生某形狀的 0..1 正規化提及曲線（長度 DAYS）
+function shapeCurve(shape) {
+  const a = [];
+  for (let i = 0; i < DAYS; i++) {
+    const p = i / (DAYS - 1); // 0..1
+    let v;
+    switch (shape) {
+      case 'new': // 27 天近零，最後 3 天噴出
+        v = i >= DAYS - 3 ? 0.15 + (i - (DAYS - 4)) * 0.32 : 0.02 + Math.random() * 0.02;
+        break;
+      case 'accel': // 持續加速上升，末端仍在爬
+        v = Math.pow(p, 1.9) * 0.9 + 0.05;
+        break;
+      case 'saturated': { // 前段爬升，之後高位平台、末端略走平
+        const rise = Math.min(1, p / 0.33);
+        v = 0.15 + Math.pow(rise, 1.3) * 0.85;
+        if (p > 0.4) v = 0.92 + Math.sin(p * 9) * 0.05; // 平台微波動
+        break;
+      }
+      case 'fading': { // 早段見頂，之後同步下滑
+        const peak = 0.32;
+        v = p < peak ? 0.3 + (p / peak) * 0.7 : 1.0 - ((p - peak) / (1 - peak)) * 0.72;
+        break;
+      }
+      default: v = 0.5;
+    }
+    a.push(Math.max(0.01, v * noise(0.06)));
+  }
+  return a;
+}
+
+// 價格曲線：saturated 早漲後走平（→背離）、accel 隨注意力漲、fading 跟跌、new 剛啟動
+function priceCurve(shape, base) {
+  const a = [];
+  for (let i = 0; i < DAYS; i++) {
+    const p = i / (DAYS - 1);
+    let mult;
+    switch (shape) {
+      case 'saturated': mult = 1 + (p < 0.5 ? p * 0.6 : 0.3 + Math.sin(p * 7) * 0.015); break; // 漲完走平
+      case 'accel':     mult = 1 + Math.pow(p, 1.6) * 0.5; break;
+      case 'fading':    mult = 1 + (p < 0.3 ? p * 0.7 : 0.21 - (p - 0.3) * 0.35); break;
+      case 'new':       mult = 1 + (i >= DAYS - 3 ? (i - (DAYS - 4)) * 0.05 : p * 0.03); break;
+      default:          mult = 1 + p * 0.1;
+    }
+    a.push(base * mult * noise(0.012));
+  }
+  return a;
+}
+
+function buildTicker(def) {
+  const curve = shapeCurve(def.shape);
+  const total = curve.map(v => Math.round(v * def.scale * noise(0.05)));
+  // 分來源：reddit / stocktwits / trends
+  const reddit = total.map(v => Math.round(v * (0.48 + (Math.random()-0.5)*0.08)));
+  const stocktwits = total.map((v,i) => Math.round(v * (0.36 + (Math.random()-0.5)*0.08)));
+  const trends = total.map((v,i) => Math.max(0, v - reddit[i] - stocktwits[i]));
+  const price = priceCurve(def.shape, 40 + Math.random()*180);
+  return { ...def, total, sources: { reddit, stocktwits, trends }, price };
+}
+
+/* ---- 指標計算 ---- */
+function sma(arr, w, idx) { // 以 idx 結尾的 w 日平均（對短歷史/越界安全）
+  idx = Math.min(idx, arr.length - 1);
+  if (idx < 0) idx = 0;
+  let s = 0, n = 0;
+  for (let i = Math.max(0, idx - w + 1); i <= idx; i++) { s += arr[i]; n++; }
+  return n ? s / n : 0;
+}
+
+function computeMetrics(td, win) {
+  const total = td.total;
+  const last = DAYS - 1;
+  // M = 7 日平滑後的總提及（最新）
+  const M = sma(total, 7, last);
+  const Mprev = sma(total, 7, last - 7);
+  const weekChange = Mprev > 0 ? (M - Mprev) / Mprev : (M > 0 ? 3 : 0);
+
+  // 視窗提及量（7d 或 30d 總和）
+  const mentionsWin = total.slice(DAYS - win).reduce((a, b) => a + b, 0);
+  const mentions7 = total.slice(DAYS - 7).reduce((a, b) => a + b, 0);
+
+  // New 的跳升倍數
+  const recent3 = sma(total, 3, last);
+  const baselinePrev = Math.max(1, sma(total, 10, DAYS - 4));
+  const jumpX = recent3 / baselinePrev;
+
+  return { M, Mprev, weekChange, mentionsWin, mentions7, recent3, jumpX };
+}
+
+// 全宇宙一起排名 → 每檔每日 rank，用來算高位天數與排名趨勢
+function computeRanks(list) {
+  const ranks = list.map(() => new Array(DAYS).fill(0));
+  const NR = list.length + 1; // 當日無提及 → 給一個「未上榜」的大排名，不算高位
+  for (let d = 0; d < DAYS; d++) {
+    const order = list
+      .map((td, i) => ({ i, v: sma(td.total, 3, d) }))
+      .sort((a, b) => b.v - a.v);
+    let r = 0;
+    order.forEach(o => { ranks[o.i][d] = o.v > 0 ? (++r) : NR; });
+  }
+  return ranks;
+}
+
+function daysAtHigh(rankSeries) {
+  let c = 0;
+  for (let d = DAYS - 1; d >= 0; d--) {
+    if (rankSeries[d] <= CFG.TOP_N) c++; else break;
+  }
+  return c;
+}
+
+function rankTrend(rankSeries, n) { // 近 n 日排名變化（負=上升/變好）
+  const i = Math.max(0, DAYS - 1 - n);
+  return rankSeries[DAYS - 1] - rankSeries[i];
+}
+
+/* ---- 背離：注意力創期間新高，但價格已走平/反轉 ---- */
+function divergenceFlag(td) {
+  if (!HAS_PRICE || !td.price) return false; // 無價格資料（live 僅提及）→ 無法判斷背離
+  const w = CFG.DIVERGE_DAYS;
+  const attnNow = sma(td.total, 3, DAYS - 1);
+  const attnMax = Math.max(...td.total.slice(DAYS - w));
+  const attnHigh = attnNow >= attnMax * 0.92; // 注意力仍在高檔
+  const priceNow = td.price[DAYS - 1];
+  const priceThen = td.price[DAYS - 1 - w];
+  const priceChg = (priceNow - priceThen) / priceThen;
+  return attnHigh && priceChg <= 0.01; // 注意力高、價格沒跟上 → 過熱背離
+}
+
+/* ---- 階段分類（第 7 節規則） ---- */
+function observedDays(td) { // 視窗內實際有資料（>0）的最長尾段天數
+  let first = td.total.findIndex(v => v > 0);
+  return first < 0 ? 0 : DAYS - first;
+}
+
+function classify(td, m, rankSeries) {
+  const dah = daysAtHigh(rankSeries);
+  const rt3 = rankTrend(rankSeries, 3);   // <0 上升
+  const rt5 = rankTrend(rankSeries, 5);
+  const reasons = [];
+  let stage;
+
+  // 觀察歷史不足 → 暖身中（避免資料集本身才幾天就把所有標的誤判為「新進榜」）
+  const obs = observedDays(td);
+  if (obs < CFG.MIN_OBS) {
+    return {
+      stage: 'Warming', dah, rt3, rt5, hot: false, obs,
+      reasons: [`資料累積中：僅觀察到 <b>${obs}</b> 天，需 ≥ ${CFG.MIN_OBS} 天才做四階段分類`,
+                `這是我方資料集的年齡，不代表該標的本身剛冒出`]
+    };
+  }
+
+  const quietBefore = sma(td.total, 10, DAYS - 4) <
+    Math.max(...td.total) * CFG.NEW_QUIET_MAX;
+
+  if (quietBefore && m.jumpX >= CFG.NEW_JUMP_X) {
+    stage = 'New';
+    reasons.push(`前期提及近乎為 0，最近 3 天跳升約 <b>${m.jumpX.toFixed(1)}×</b>（門檻 ${CFG.NEW_JUMP_X}×）`);
+  } else if (dah >= CFG.SAT_DAYS && m.weekChange <= 0.05) {
+    stage = 'Saturated';
+    reasons.push(`排名在前 ${CFG.TOP_N} 名已停留 <b>${dah}</b> 天（門檻 ${CFG.SAT_DAYS} 天）`);
+    reasons.push(`週變化 <b>${(m.weekChange*100).toFixed(0)}%</b> 由正轉平/負 → 熱度見頂`);
+  } else if (m.weekChange >= CFG.ACCEL_THRESH && rt5 <= 0) {
+    stage = 'Accelerating';
+    reasons.push(`週變化 <b>+${(m.weekChange*100).toFixed(0)}%</b> ≥ 門檻 +${(CFG.ACCEL_THRESH*100)}%`);
+    reasons.push(`排名近 5 日 ${rt5 < 0 ? '上升' : '持平'}（Δrank ${rt5}）`);
+  } else if (m.weekChange <= CFG.FADE_THRESH && rt5 >= 0) {
+    stage = 'Fading';
+    reasons.push(`週變化 <b>${(m.weekChange*100).toFixed(0)}%</b> ≤ 門檻 ${(CFG.FADE_THRESH*100)}%`);
+    reasons.push(`排名近 5 日下滑（Δrank +${rt5}）→ 群眾在離開`);
+  } else if (dah >= CFG.SAT_DAYS) {
+    stage = 'Saturated';
+    reasons.push(`長期高位（前 ${CFG.TOP_N} 名 ${dah} 天），熱度未再擴大`);
+  } else if (m.weekChange >= CFG.ACCEL_THRESH) {
+    stage = 'Accelerating';
+    reasons.push(`週變化 <b>+${(m.weekChange*100).toFixed(0)}%</b>，動能仍在擴散`);
+  } else if (m.weekChange <= CFG.FADE_THRESH) {
+    stage = 'Fading';
+    reasons.push(`週變化 <b>${(m.weekChange*100).toFixed(0)}%</b>，熱度收縮`);
+  } else {
+    stage = 'Accelerating';
+    reasons.push(`介於加速與飽和之間，暫歸動能持有`);
+  }
+
+  const hot = divergenceFlag(td);
+  if (hot) reasons.push(`⚠ <b>過熱背離</b>：注意力仍在高檔，但價格已走平/反轉`);
+
+  return { stage, dah, rt3, rt5, hot, reasons };
+}
+
+/* ---- SVG 迷你 sparkline ---- */
+function sparkline(vals, w, h, color, fill) {
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const rng = max - min || 1;
+  const step = w / (vals.length - 1);
+  const pts = vals.map((v, i) => [i * step, h - ((v - min) / rng) * (h - 2) - 1]);
+  const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  let area = '';
+  if (fill) {
+    area = `<path d="${line} L${w},${h} L0,${h} Z" fill="${color}" opacity="0.12"/>`;
+  }
+  return `<svg class="mini-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+    ${area}<path d="${line}" fill="none" stroke="${color}" stroke-width="1.6"
+      stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+/* ---- 詳情：注意力 vs 股價 疊圖 ---- */
+function overlayChart(td) {
+  const w = 520, h = 190, padL = 6, padR = 6, padT = 12, padB = 18;
+  const iw = w - padL - padR, ih = h - padT - padB;
+  const attn = td.total;
+  const hasPrice = HAS_PRICE && td.price;
+  const price = hasPrice ? td.price : null;
+  const aMin = Math.min(...attn), aMax = Math.max(...attn), aR = aMax - aMin || 1;
+  const pMin = hasPrice ? Math.min(...price) : 0;
+  const pMax = hasPrice ? Math.max(...price) : 1;
+  const pR = pMax - pMin || 1;
+  const x = i => padL + (i / (DAYS - 1)) * iw;
+  const yA = v => padT + ih - ((v - aMin) / aR) * ih;
+  const yP = v => padT + ih - ((v - pMin) / pR) * ih;
+  const attnLine = attn.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + yA(v).toFixed(1)).join(' ');
+  const grid = [0.25, 0.5, 0.75].map(g =>
+    `<line x1="${padL}" y1="${padT + ih*g}" x2="${w-padR}" y2="${padT + ih*g}"
+      stroke="var(--border)" stroke-dasharray="2 4"/>`).join('');
+  const priceLine = (HAS_PRICE && price)
+    ? `<path d="${price.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + yP(v).toFixed(1)).join(' ')}"
+        fill="none" stroke="var(--sat)" stroke-width="2" stroke-dasharray="5 3" stroke-linejoin="round"/>`
+    : '';
+  return `<svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
+    ${grid}
+    <path d="${attnLine} L${x(DAYS-1)},${padT+ih} L${padL},${padT+ih} Z" fill="var(--accent)" opacity="0.10"/>
+    <path d="${attnLine}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+    ${priceLine}
+  </svg>`;
+}
+
+/* ---- 狀態 ---- */
+let DATA = [];
+let sortKey = 'mentions7';
+let sortDir = -1; // -1 降冪
+let win = 7;
+let expanded = null;
+
+// 共用管線：不論資料來自 live 或 mock，都用同一套排名/指標/分類
+function enrich() {
+  const ranks = computeRanks(DATA);
+  DATA.forEach((td, i) => {
+    td.rankSeries = ranks[i];
+    td.metrics = computeMetrics(td, win);
+    td.cls = classify(td, td.metrics, ranks[i]);
+    td.stageOrder = STAGE_META[td.cls.stage].order;
+    td.rank = ranks[i][DAYS - 1];
+  });
+}
+
+// P0 內建假資料
+function rebuildMock() {
+  MODE = 'mock'; HAS_PRICE = true; DAYS = 30;
+  SRC_LIST = ['reddit', 'stocktwits', 'trends'];
+  SRC_LABEL = { reddit: 'Reddit (r/wallstreetbets)', stocktwits: 'StockTwits', trends: 'Google Trends' };
+  seedT++;
+  DATA = UNIVERSE.map(buildTicker);
+  GENERATED_AT = new Date().toISOString();
+  enrich();
+}
+
+// P1 真實資料：讀 data.json（由 fetch.py 產生）
+async function loadLive() {
+  try {
+    const res = await fetch('data.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) return false;
+    const json = await res.json();
+    if (!json.tickers || !json.tickers.length) return false;
+    MODE = 'live'; HAS_PRICE = false;
+    DAYS = json.dates.length;
+    SRC_LIST = json.sources.slice();
+    SRC_LABEL = {}; SRC_LIST.forEach(s => SRC_LABEL[s] = s);
+    GENERATED_AT = json.generated_at;
+    DATA = json.tickers.map(t => ({
+      ticker: t.ticker, name: t.name || t.ticker, first_seen: t.first_seen,
+      total: t.total, sources: t.sources, price: t.price || null
+    }));
+    enrich();
+    return true;
+  } catch (e) {
+    console.warn('讀取 data.json 失敗，回退 mock：', e.message);
+    return false;
+  }
+}
+
+function updateBadge() {
+  const el = document.getElementById('modeBadge');
+  const upd = GENERATED_AT
+    ? new Date(GENERATED_AT).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+  if (MODE === 'live') {
+    el.innerHTML = `<b style="color:var(--new)">● 即時資料</b> ApeWisdom · ${SRC_LIST.join(' + ')} · 快照 ${upd}`;
+  } else {
+    el.innerHTML = `<code>mock（P0 原型｜未取得 data.json）</code> · ${upd}`;
+  }
+}
+
+async function boot() {
+  const ok = await loadLive();
+  if (!ok) rebuildMock();
+  setSourceButtons();
+  render();
+  updateBadge();
+}
+
+function recomputeWindow() {
+  DATA.forEach(td => { td.metrics = computeMetrics(td, win); });
+}
+
+function fmt(n) { return n.toLocaleString('en-US'); }
+
+function render() {
+  renderBanner();
+  renderAlerts();
+  renderTable();
+}
+
+function renderBanner() {
+  const el = document.getElementById('warmupBanner');
+  const warming = DATA.filter(d => d.cls.stage === 'Warming').length;
+  if (MODE === 'live' && warming > 0) {
+    el.style.display = 'flex';
+    el.innerHTML = `⏳ <span><b>${warming}</b> 檔資料暖身中（歷史 &lt; ${CFG.MIN_OBS} 天）。`
+      + `本工具今天才開始每日累積快照，隨天數增加會自動解鎖 🌱新／🚀加速／🥵飽和／📉退潮 分類。`
+      + `想立即看四階段效果 → 切到「範例」。</span>`;
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+function renderAlerts() {
+  const news = DATA.filter(d => d.cls.stage === 'New')
+    .sort((a, b) => b.metrics.jumpX - a.metrics.jumpX);
+  const sats = DATA.filter(d => d.cls.stage === 'Saturated')
+    .sort((a, b) => b.cls.dah - a.cls.dah);
+
+  document.getElementById('newCount').textContent = news.length;
+  document.getElementById('satCount').textContent = sats.length;
+
+  const newEl = document.getElementById('newAlerts');
+  const satEl = document.getElementById('satAlerts');
+
+  newEl.innerHTML = news.length ? news.map(d => `
+    <div class="alert-item" data-jump="${d.ticker}">
+      <span class="a-ticker">${d.ticker}</span>
+      <span class="a-note">跳升 ${d.metrics.jumpX.toFixed(1)}× · 首次進榜（不要 fade）</span>
+      <span class="a-spark">${sparkline(d.total.slice(-14), 70, 22, 'var(--new)', true)}</span>
+    </div>`).join('') : `<div class="alert-empty">目前無新進榜訊號</div>`;
+
+  satEl.innerHTML = sats.length ? sats.map(d => `
+    <div class="alert-item" data-jump="${d.ticker}">
+      <span class="a-ticker">${d.ticker}</span>
+      <span class="a-note">榜首/高位 ${d.cls.dah} 天${d.cls.hot ? ' · 價已走平' : ''}</span>
+      <span class="a-spark">${sparkline(d.total.slice(-14), 70, 22, 'var(--sat)', true)}</span>
+    </div>`).join('') : `<div class="alert-empty">目前無飽和訊號</div>`;
+
+  document.querySelectorAll('.alert-item[data-jump]').forEach(el => {
+    el.onclick = () => {
+      const t = el.getAttribute('data-jump');
+      expanded = expanded === t ? null : t;
+      renderTable();
+      const row = document.querySelector(`tr[data-ticker="${t}"]`);
+      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
+}
+
+function sortData() {
+  const arr = [...DATA];
+  arr.sort((a, b) => {
+    let av, bv;
+    switch (sortKey) {
+      case 'ticker': av = a.ticker; bv = b.ticker; return sortDir * av.localeCompare(bv);
+      case 'stageOrder': av = a.stageOrder; bv = b.stageOrder; break;
+      case 'mentions7': av = a.metrics.mentionsWin; bv = b.metrics.mentionsWin; break;
+      case 'weekChange': av = a.metrics.weekChange; bv = b.metrics.weekChange; break;
+      case 'daysAtHigh': av = a.cls.dah; bv = b.cls.dah; break;
+      default: av = 0; bv = 0;
+    }
+    return sortDir * (av - bv);
+  });
+  return arr;
+}
+
+function renderTable() {
+  const rows = sortData();
+  const tbody = document.getElementById('tbody');
+  let html = '';
+  rows.forEach(d => {
+    const meta = STAGE_META[d.cls.stage];
+    const warming = d.cls.stage === 'Warming';
+    const wc = d.metrics.weekChange;
+    const wcClass = wc >= 0 ? 'chg-pos' : 'chg-neg';
+    // 暖身中：週變化/高位天數尚無意義，顯示 — 避免誤導
+    const wcCell = warming ? '<span style="color:var(--text-faint)">—</span>'
+      : `<span class="${wcClass}">${(wc >= 0 ? '+' : '') + (wc * 100).toFixed(0)}%</span>`;
+    const dahCell = warming ? '<span style="color:var(--text-faint)">—</span>' : d.cls.dah;
+    const sparkColor = d.cls.stage === 'Fading' ? 'var(--fade)'
+      : d.cls.stage === 'Saturated' ? 'var(--sat)'
+      : d.cls.stage === 'New' ? 'var(--new)'
+      : warming ? '#b083f0' : 'var(--accent)';
+    html += `<tr class="row" data-ticker="${d.ticker}">
+      <td><span class="tk">${d.ticker}${d.cls.hot ? '<span class="flag-hot">過熱</span>' : ''}<small>${d.name}</small></span></td>
+      <td style="text-align:left"><span class="stage-pill stage-${d.cls.stage}">${meta.icon} ${meta.label}</span></td>
+      <td>${fmt(d.metrics.mentionsWin)}</td>
+      <td>${wcCell}</td>
+      <td>${dahCell}</td>
+      <td style="text-align:right">${sparkline(d.total.slice(win === 7 ? -10 : -30), 88, 26, sparkColor, false)}</td>
+    </tr>`;
+    if (expanded === d.ticker) html += detailRow(d);
+  });
+  tbody.innerHTML = html;
+
+  document.querySelectorAll('tr.row').forEach(r => {
+    r.onclick = () => {
+      const t = r.getAttribute('data-ticker');
+      expanded = expanded === t ? null : t;
+      renderTable();
+    };
+  });
+  // 更新表頭排序指示
+  document.querySelectorAll('#headRow th').forEach(th => {
+    const key = th.getAttribute('data-key');
+    th.classList.toggle('sorted', key === sortKey);
+    const arrow = th.querySelector('.arrow');
+    if (arrow && key === sortKey) arrow.textContent = sortDir < 0 ? '▾' : '▴';
+    else if (arrow) arrow.textContent = '▾';
+  });
+  document.querySelectorAll('.win-label').forEach(e => e.textContent = win);
+}
+
+function detailRow(d) {
+  const sum = k => (d.sources[k] || []).slice(DAYS - win).reduce((a, b) => a + b, 0);
+  const vals = SRC_LIST.map(sum);
+  const tot = vals.reduce((a, b) => a + b, 0) || 1;
+  const srcBar = (label, val, color) => {
+    const pct = (val / tot * 100);
+    return `<div class="src-row">
+      <div class="src-head"><span>${label}</span><span>${fmt(val)} · ${pct.toFixed(0)}%</span></div>
+      <div class="src-track"><div class="src-fill" style="width:${pct}%;background:${color}"></div></div>
+    </div>`;
+  };
+  const srcBars = SRC_LIST.map((k, i) =>
+    srcBar(SRC_LABEL[k] || k, vals[i], SRC_COLORS[i % SRC_COLORS.length])).join('');
+
+  const hasPrice = HAS_PRICE && d.price;
+  const priceChg = hasPrice
+    ? ((d.price[DAYS-1] - d.price[DAYS-1-win]) / d.price[DAYS-1-win] * 100) : null;
+  const chartHead = hasPrice ? '注意力（實線） vs 股價（虛線）疊圖 · 近 ' + DAYS + ' 天'
+    : '跨平台提及趨勢 · 近 ' + DAYS + ' 天';
+  const legend = hasPrice
+    ? `<span><i style="background:var(--accent)"></i>跨平台提及數</span>
+       <span><i style="background:var(--sat)"></i>股價</span>
+       <span style="margin-left:auto;color:var(--text-faint)">價格近 ${win} 日 ${priceChg>=0?'+':''}${priceChg.toFixed(1)}%</span>`
+    : `<span><i style="background:var(--accent)"></i>跨平台提及數</span>
+       <span style="margin-left:auto;color:var(--text-faint)">股價疊圖為 P2 功能（尚未接入）</span>`;
+
+  return `<tr class="detail-row"><td colspan="6"><div class="detail">
+    <div>
+      <div class="reason">
+        <div class="r-title">${STAGE_META[d.cls.stage].icon} 分類理由 — ${STAGE_META[d.cls.stage].label}${d.cls.hot ? ' <span class="flag-hot">過熱背離</span>' : ''}</div>
+        <ul>${d.cls.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
+      </div>
+      <h4>${chartHead}</h4>
+      <div class="chart-box">
+        ${overlayChart(d)}
+        <div class="legend">${legend}</div>
+      </div>
+    </div>
+    <div>
+      <div class="metrics-grid">
+        <div class="metric"><div class="m-label">提及 (${win}d)</div><div class="m-val">${fmt(d.metrics.mentionsWin)}</div></div>
+        <div class="metric"><div class="m-label">週變化率</div><div class="m-val ${d.metrics.weekChange>=0?'chg-pos':'chg-neg'}">${d.metrics.weekChange>=0?'+':''}${(d.metrics.weekChange*100).toFixed(0)}%</div></div>
+        <div class="metric"><div class="m-label">目前排名</div><div class="m-val">#${d.rank ?? '—'}</div></div>
+        <div class="metric"><div class="m-label">高位停留</div><div class="m-val">${d.cls.dah} 天</div></div>
+      </div>
+      <h4>各來源分解（近 ${win} 天）</h4>
+      <div class="src-bars">${srcBars}</div>
+    </div>
+  </div></td></tr>`;
+}
+
+/* ---- 事件綁定 ---- */
+document.getElementById('headRow').addEventListener('click', e => {
+  const th = e.target.closest('th.sortable');
+  if (!th) return;
+  const key = th.getAttribute('data-key');
+  if (sortKey === key) sortDir *= -1;
+  else { sortKey = key; sortDir = key === 'ticker' ? 1 : -1; }
+  renderTable();
+});
+
+document.getElementById('sourceSeg').addEventListener('click', async e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const want = btn.getAttribute('data-src');
+  if (want === MODE) return;
+  if (want === 'live') {
+    const ok = await loadLive();
+    if (!ok) { alert('讀不到 data.json（需以 http 開啟、且已跑過 fetch.py）。維持範例資料。'); return; }
+  } else {
+    rebuildMock();
+  }
+  setSourceButtons();
+  expanded = null;
+  render();
+  updateBadge();
+});
+
+function setSourceButtons() {
+  document.querySelectorAll('#sourceSeg button').forEach(b =>
+    b.classList.toggle('active', b.getAttribute('data-src') === MODE));
+}
+
+document.getElementById('windowSeg').addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  document.querySelectorAll('#windowSeg button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  win = +btn.getAttribute('data-win');
+  recomputeWindow();
+  render();
+});
+
+document.getElementById('refreshBtn').addEventListener('click', async e => {
+  const btn = e.currentTarget;
+  btn.classList.add('loading');
+  if (MODE === 'live') {
+    await loadLive();          // 重新抓 data.json（含 cache-bust）
+  } else {
+    await new Promise(r => setTimeout(r, 350));
+    rebuildMock();
+  }
+  render();
+  updateBadge();
+  btn.classList.remove('loading');
+});
+
+/* ---- 啟動 ---- */
+boot();
+</script>
+</body>
+</html>

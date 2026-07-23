@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 注意：attention.db 與 data.json 「不」忽略 —
+# 它們是歷史快照的儲存本體，需隨每日 GitHub Actions commit 累積。

@@ -1,0 +1,41 @@
+name: 每日更新注意力快照
+
+on:
+  schedule:
+    # 每日 13:00 UTC（約台北 21:00）。可自行調整 cron。
+    - cron: "0 13 * * *"
+  workflow_dispatch: {}   # 允許手動觸發
+
+permissions:
+  contents: write         # 讓 workflow 能 commit 回 data.json / attention.db
+
+concurrency:
+  group: attention-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 抓取 ApeWisdom 並更新快照
+        run: python fetch.py
+
+      - name: Commit 更新後的資料
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json attention.db
+          if git diff --staged --quiet; then
+            echo "無變更，略過 commit。"
+          else
+            git commit -m "chore: 每日注意力快照 $(date -u +%F)"
+            git push
+          fi
