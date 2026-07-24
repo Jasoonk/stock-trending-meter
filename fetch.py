@@ -43,6 +43,18 @@ EXPORT_DAYS = 30      # 匯出視窗天數
 API = "https://apewisdom.io/api/v1.0/filter/{flt}/page/1"
 UA = "attention-lifecycle-dashboard/1.0 (personal research; +https://github.com)"
 
+# CNN 恐慌貪婪指數（非官方端點，需完整瀏覽器標頭；失敗時整體不中斷，僅略過此區塊）
+FG_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+FG_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.cnn.com/markets/fear-and-greed",
+    "Origin": "https://www.cnn.com",
+}
+FG_HISTORY_DAYS = 30
+
 
 # --------------------------------------------------------------------------- #
 # 抓取
@@ -61,6 +73,41 @@ def fetch_filter(flt, retries=3):
             last_err = e
     print(f"  ! {flt} 抓取失敗（已重試 {retries} 次）：{last_err}")
     return []
+
+
+def _r(v):
+    return round(float(v), 1) if v is not None else None
+
+
+def fetch_fear_greed(retries=2):
+    """CNN 恐慌貪婪指數。回傳 dict 或 None（失敗不影響主流程）。"""
+    last = None
+    for _ in range(retries):
+        try:
+            req = urllib.request.Request(FG_URL, headers=FG_HEADERS)
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                d = json.load(resp)
+            fg = d.get("fear_and_greed") or {}
+            if "score" not in fg:
+                return None
+            hist = (d.get("fear_and_greed_historical") or {}).get("data", [])
+            hist_slim = [{"t": int(p["x"]), "y": round(float(p["y"]), 1)}
+                         for p in hist[-FG_HISTORY_DAYS:]]
+            return {
+                "score": _r(fg.get("score")),
+                "rating": fg.get("rating"),
+                "timestamp": fg.get("timestamp"),
+                "previous_close": _r(fg.get("previous_close")),
+                "previous_1_week": _r(fg.get("previous_1_week")),
+                "previous_1_month": _r(fg.get("previous_1_month")),
+                "previous_1_year": _r(fg.get("previous_1_year")),
+                "history": hist_slim,
+            }
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
+                ValueError, KeyError) as e:
+            last = e
+    print(f"  ! CNN 恐慌貪婪指數抓取失敗（略過此區塊）：{last}")
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -87,6 +134,14 @@ def init_db(conn):
             first_seen    TEXT,
             current_stage TEXT,   -- 保留欄位；目前分類在前端做
             stage_since   TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS market_indicators (
+            indicator TEXT NOT NULL,
+            timestamp TEXT NOT NULL,   -- ISO 日期（每日快照）
+            score     REAL,
+            rating    TEXT,
+            UNIQUE(indicator, timestamp)
         );
         """
     )
@@ -129,7 +184,7 @@ def upsert_tickers(conn, names, today):
 # --------------------------------------------------------------------------- #
 # 匯出 data.json
 # --------------------------------------------------------------------------- #
-def export_json(conn, today):
+def export_json(conn, today, fg=None):
     source_labels = list(SOURCES.values())
     dates = [
         (today - datetime.timedelta(days=EXPORT_DAYS - 1 - i)).isoformat()
@@ -215,6 +270,7 @@ def export_json(conn, today):
         "dates": dates,
         "sources": source_labels,
         "tickers": out_tickers,
+        "market": {"fear_greed": fg} if fg else {},
     }
     OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return len(out_tickers)
@@ -255,12 +311,23 @@ def main():
         print("沒有抓到任何資料，中止（不覆蓋既有 data.json）。")
         return 1
 
+    fg = fetch_fear_greed()
+    if fg:
+        print(f"  · CNN 恐慌貪婪指數：{fg['score']}（{fg['rating']}）")
+
     conn = sqlite3.connect(DB_PATH)
     try:
         init_db(conn)
         upsert_tickers(conn, names, today_s)
         store_snapshots(conn, rows_today, rows_yesterday, today_s, yesterday_s)
-        n = export_json(conn, today)
+        if fg:
+            conn.execute(
+                "INSERT OR REPLACE INTO market_indicators "
+                "(indicator, timestamp, score, rating) VALUES (?,?,?,?)",
+                ("cnn_fear_greed", today_s, fg["score"], fg["rating"]),
+            )
+            conn.commit()
+        n = export_json(conn, today, fg)
         cur = conn.execute("SELECT COUNT(*) FROM snapshots")
         total_rows = cur.fetchone()[0]
     finally:

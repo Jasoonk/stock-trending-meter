@@ -146,6 +146,31 @@
     margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
   }
   .warmup-banner b { color: var(--text); }
+
+  /* 市場情緒 / 恐慌貪婪指數 */
+  .market-card {
+    display: flex; gap: 22px; align-items: center;
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 14px 20px; margin-bottom: 18px;
+  }
+  .fg-gauge { width: 200px; flex: 0 0 200px; }
+  .fg-body { flex: 1; min-width: 0; }
+  .fg-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .fg-title { font-weight: 700; font-size: 14px; }
+  .fg-rating { font-weight: 800; font-size: 17px; margin-left: auto; }
+  .fg-stats { display: flex; gap: 20px; margin: 11px 0 4px; flex-wrap: wrap; }
+  .fg-stat { display: flex; flex-direction: column; }
+  .fg-stat-label { font-size: 11px; color: var(--text-faint); }
+  .fg-stat-val { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .fg-stat-val small { font-size: 11px; font-weight: 700; }
+  .fg-hint { font-size: 12.5px; font-weight: 600; margin: 4px 0 2px; }
+  .fg-spark { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .fg-spark-label { font-size: 11px; color: var(--text-faint); }
+  @media (max-width: 640px) {
+    .market-card { flex-direction: column; align-items: stretch; }
+    .fg-gauge { width: 100%; max-width: 260px; margin: 0 auto; }
+    .fg-rating { margin-left: 0; }
+  }
   .chg-pos { color: var(--new); }
   .chg-neg { color: var(--danger); }
   .flag-hot {
@@ -215,6 +240,8 @@
     追蹤每檔在群眾注意力曲線上的位置：🌱剛冒出 → 🚀加速 → 🥵飽和 → 📉退潮。
     分類由第 7 節規則即時計算 · <span class="updated" id="modeBadge"></span>
   </div>
+
+  <div class="market-card" id="marketCard" style="display:none"></div>
 
   <div class="warmup-banner" id="warmupBanner" style="display:none"></div>
 
@@ -305,6 +332,14 @@ let GENERATED_AT = null;       // 資料產生時間
 let SRC_LIST = ['reddit', 'stocktwits', 'trends'];  // 來源鍵
 let SRC_LABEL = { reddit: 'Reddit (r/wallstreetbets)', stocktwits: 'StockTwits', trends: 'Google Trends' };
 const SRC_COLORS = ['var(--accent)', 'var(--new)', 'var(--sat)', '#a371f7', '#f778ba'];
+let MARKET = null;             // {fear_greed:{score,rating,history,previous_1_week,...}} 或 null
+const RAT_ZH = { 'extreme fear': '極度恐慌', 'fear': '恐慌', 'neutral': '中性', 'greed': '貪婪', 'extreme greed': '極度貪婪' };
+function ratingFromScore(s) {
+  return s < 25 ? 'extreme fear' : s < 45 ? 'fear' : s <= 55 ? 'neutral' : s <= 75 ? 'greed' : 'extreme greed';
+}
+function fgZoneColor(s) {
+  return s < 25 ? '#f85149' : s < 45 ? '#f0883e' : s <= 55 ? '#d29922' : s <= 75 ? '#3fb950' : '#2ea043';
+}
 
 function noise(mag) { return 1 + (Math.random() - 0.5) * 2 * mag; }
 
@@ -544,6 +579,76 @@ function overlayChart(td) {
   </svg>`;
 }
 
+/* ---- 恐慌貪婪指數：半圓儀表 ---- */
+function fearGreedGauge(score, col) {
+  const cx = 120, cy = 122, r = 92, sw = 16;
+  const bands = [[0,25,'#f85149'],[25,45,'#f0883e'],[45,55,'#d29922'],[55,75,'#3fb950'],[75,100,'#2ea043']];
+  const ang = v => 180 * (1 - v / 100);                 // 0→180°(左) 100→0°(右)
+  const polar = (rr, deg) => { const a = deg*Math.PI/180; return [cx+rr*Math.cos(a), cy-rr*Math.sin(a)]; };
+  const arc = (v0, v1) => {
+    const d0 = ang(v0), d1 = ang(v1);
+    const [x0,y0] = polar(r,d0), [x1,y1] = polar(r,d1);
+    return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 0 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+  };
+  const arcs = bands.map(b => `<path d="${arc(b[0],b[1])}" fill="none" stroke="${b[2]}" stroke-width="${sw}" stroke-linecap="butt"/>`).join('');
+  const [nx, ny] = polar(r - 22, ang(score));
+  return `<svg width="100%" viewBox="0 0 240 150" preserveAspectRatio="xMidYMid meet">
+    ${arcs}
+    <line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="var(--text)" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="${cx}" cy="${cy}" r="7" fill="var(--text)"/>
+    <text x="${cx}" y="${cy-26}" text-anchor="middle" font-size="36" font-weight="800" fill="${col}">${Math.round(score)}</text>
+    <text x="16" y="146" font-size="11" fill="var(--text-faint)">0 恐慌</text>
+    <text x="224" y="146" text-anchor="end" font-size="11" fill="var(--text-faint)">貪婪 100</text>
+  </svg>`;
+}
+
+function synthMarket() { // 範例模式用的假 F&G
+  let s = Math.max(10, Math.min(90, Math.round(50 + (Math.random()-0.5)*60)));
+  const hist = []; let v = s + (Math.random()-0.5)*20;
+  for (let i = 0; i < 30; i++) { v += (Math.random()-0.5)*6; v = Math.max(5, Math.min(95, v)); hist.push({ t: Date.now()-(29-i)*864e5, y: Math.round(v) }); }
+  hist[29].y = s;
+  return { fear_greed: { score: s, rating: ratingFromScore(s), history: hist,
+    previous_close: hist[28].y, previous_1_week: hist[23].y, previous_1_month: hist[0].y,
+    previous_1_year: Math.round(30 + Math.random()*50) } };
+}
+
+function renderMarket() {
+  const el = document.getElementById('marketCard');
+  const fg = MARKET && MARKET.fear_greed;
+  if (!fg) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const s = fg.score;
+  const ratKey = fg.rating || ratingFromScore(s);
+  const col = fgZoneColor(s);
+  const hist = (fg.history || []).map(p => p.y);
+  const stat = (label, val) => {
+    if (val == null) return '';
+    const dv = s - val, up = dv >= 0;
+    return `<div class="fg-stat"><span class="fg-stat-label">${label}</span>
+      <span class="fg-stat-val">${Math.round(val)}
+      <small style="color:${up?'var(--new)':'var(--danger)'}">${up?'▲':'▼'}${Math.abs(dv).toFixed(0)}</small></span></div>`;
+  };
+  const hint = s >= 75 ? '群眾極度貪婪 → 過熱，反著做的候選'
+    : s <= 25 ? '群眾極度恐慌 → 別人恐懼時，留意是否過度'
+    : '';
+  el.innerHTML = `
+    <div class="fg-gauge">${fearGreedGauge(s, col)}</div>
+    <div class="fg-body">
+      <div class="fg-head">
+        <span class="fg-title">市場情緒 · CNN 恐慌貪婪指數</span>
+        <span class="fg-rating" style="color:${col}">${RAT_ZH[ratKey] || ratKey}</span>
+      </div>
+      <div class="fg-stats">
+        ${stat('前收', fg.previous_close)}
+        ${stat('上週', fg.previous_1_week)}
+        ${stat('上月', fg.previous_1_month)}
+        ${stat('去年', fg.previous_1_year)}
+      </div>
+      ${hint ? `<div class="fg-hint" style="color:${col}">⚠ ${hint}</div>` : ''}
+      ${hist.length ? `<div class="fg-spark">${sparkline(hist, 220, 34, col, true)}<span class="fg-spark-label">近 ${hist.length} 交易日</span></div>` : ''}
+    </div>`;
+}
+
 /* ---- 狀態 ---- */
 let DATA = [];
 let sortKey = 'mentions7';
@@ -570,6 +675,7 @@ function rebuildMock() {
   SRC_LABEL = { reddit: 'Reddit (r/wallstreetbets)', stocktwits: 'StockTwits', trends: 'Google Trends' };
   seedT++;
   DATA = UNIVERSE.map(buildTicker);
+  MARKET = synthMarket();
   GENERATED_AT = new Date().toISOString();
   enrich();
 }
@@ -586,6 +692,7 @@ async function loadLive() {
     SRC_LIST = json.sources.slice();
     SRC_LABEL = {}; SRC_LIST.forEach(s => SRC_LABEL[s] = s);
     GENERATED_AT = json.generated_at;
+    MARKET = (json.market && json.market.fear_greed) ? json.market : null;
     DATA = json.tickers.map(t => ({
       ticker: t.ticker, name: t.name || t.ticker, first_seen: t.first_seen,
       total: t.total, sources: t.sources, price: t.price || null
@@ -625,6 +732,7 @@ function recomputeWindow() {
 function fmt(n) { return n.toLocaleString('en-US'); }
 
 function render() {
+  renderMarket();
   renderBanner();
   renderAlerts();
   renderTable();
