@@ -19,6 +19,7 @@ import sqlite3
 import datetime
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 # Windows 主控台預設 cp1252 印不出中文；強制 UTF-8（CI 的 Ubuntu 本就 UTF-8）
@@ -54,6 +55,15 @@ FG_HEADERS = {
     "Origin": "https://www.cnn.com",
 }
 FG_HISTORY_DAYS = 30
+
+# 股價（P2 背離旗標）：Yahoo chart API（免金鑰、免第三方套件）
+YF_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=2mo&interval=1d"
+YF_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "Accept": "application/json",
+}
+PRICE_TARGETS = 60    # 只抓熱度前 N 檔的股價（省請求）
 
 
 # --------------------------------------------------------------------------- #
@@ -110,6 +120,46 @@ def fetch_fear_greed(retries=2):
     return None
 
 
+def yahoo_daily(ticker, retries=2):
+    """抓某檔近 2 個月的每日收盤。回傳 {date_iso: close} 或 None。"""
+    url = YF_URL.format(sym=urllib.parse.quote(ticker))
+    for _ in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=YF_HEADERS)
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                d = json.load(resp)
+            res = (d.get("chart") or {}).get("result")
+            if not res:
+                return None
+            r = res[0]
+            ts = r.get("timestamp") or []
+            quote = ((r.get("indicators") or {}).get("quote") or [{}])[0]
+            closes = quote.get("close") or []
+            out = {}
+            for t, c in zip(ts, closes):
+                if c is None:
+                    continue
+                dt = datetime.datetime.fromtimestamp(t, datetime.timezone.utc).date().isoformat()
+                out[dt] = round(float(c), 2)
+            return out or None
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
+                ValueError, KeyError):
+            continue
+    return None
+
+
+def fetch_prices(tickers):
+    """對一組 ticker 抓每日收盤。回傳 {ticker: {date: close}}；抓不到的略過（前端顯示 null）。"""
+    out, ok = {}, 0
+    for t in tickers:
+        closes = yahoo_daily(t)
+        if closes:
+            out[t] = closes
+            ok += 1
+    print(f"  · 股價：{ok}/{len(tickers)} 檔取得")
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # 資料庫（schema 依計畫 §6）
 # --------------------------------------------------------------------------- #
@@ -143,6 +193,14 @@ def init_db(conn):
             rating    TEXT,
             UNIQUE(indicator, timestamp)
         );
+
+        CREATE TABLE IF NOT EXISTS prices (
+            ticker TEXT NOT NULL,
+            date   TEXT NOT NULL,      -- ISO 交易日
+            close  REAL,
+            UNIQUE(ticker, date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_prices_ticker ON prices(ticker);
         """
     )
     conn.commit()
@@ -184,6 +242,17 @@ def upsert_tickers(conn, names, today):
 # --------------------------------------------------------------------------- #
 # 匯出 data.json
 # --------------------------------------------------------------------------- #
+def build_price_array(sorted_closes, dates):
+    """把 (date,close) 依 dates 前值補齊；缺口用最近一筆收盤延續。全空或有缺口回 None。"""
+    arr, last, j = [], None, 0
+    for d in dates:
+        while j < len(sorted_closes) and sorted_closes[j][0] <= d:
+            last = sorted_closes[j][1]
+            j += 1
+        arr.append(last)
+    return arr if all(v is not None for v in arr) else None
+
+
 def export_json(conn, today, fg=None):
     source_labels = list(SOURCES.values())
     dates = [
@@ -246,6 +315,20 @@ def export_json(conn, today, fg=None):
     for ticker, name, first_seen in cur.fetchall():
         meta[ticker] = (name, first_seen)
 
+    # 股價：讀 prices 表、對齊 dates（前值補齊）
+    price_series = {}
+    if kept:
+        ph = ",".join("?" * len(kept))
+        cur.execute(
+            f"SELECT ticker, date, close FROM prices WHERE ticker IN ({ph}) ORDER BY date",
+            kept,
+        )
+        raw = {}
+        for tk, dt, cl in cur.fetchall():
+            raw.setdefault(tk, []).append((dt, cl))
+        for tk, lst in raw.items():
+            price_series[tk] = build_price_array(lst, dates)
+
     out_tickers = []
     for t in kept:
         name, first_seen = meta.get(t, (t, None))
@@ -259,7 +342,7 @@ def export_json(conn, today, fg=None):
                 "sources": {
                     lbl: cell.get((t, lbl), [0] * EXPORT_DAYS) for lbl in source_labels
                 },
-                "price": None,  # 價格背離為 P2 功能，尚未接入
+                "price": price_series.get(t),  # 每日收盤（對齊 dates）或 None
             }
         )
 
@@ -271,6 +354,7 @@ def export_json(conn, today, fg=None):
         "sources": source_labels,
         "tickers": out_tickers,
         "market": {"fear_greed": fg} if fg else {},
+        "has_price": any(price_series.get(t) for t in kept),
     }
     OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return len(out_tickers)
@@ -315,11 +399,25 @@ def main():
     if fg:
         print(f"  · CNN 恐慌貪婪指數：{fg['score']}（{fg['rating']}）")
 
+    # 股價：只抓今日熱度前 N 檔（省請求）
+    today_totals = {}
+    for r in rows_today:
+        today_totals[r["ticker"]] = today_totals.get(r["ticker"], 0) + r["mentions"]
+    price_targets = sorted(today_totals, key=today_totals.get, reverse=True)[:PRICE_TARGETS]
+    prices = fetch_prices(price_targets)
+
     conn = sqlite3.connect(DB_PATH)
     try:
         init_db(conn)
         upsert_tickers(conn, names, today_s)
         store_snapshots(conn, rows_today, rows_yesterday, today_s, yesterday_s)
+        for tk, closes in prices.items():
+            for dt, cl in closes.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO prices (ticker, date, close) VALUES (?,?,?)",
+                    (tk, dt, cl),
+                )
+        conn.commit()
         if fg:
             conn.execute(
                 "INSERT OR REPLACE INTO market_indicators "

@@ -381,7 +381,7 @@ function priceCurve(shape, base) {
     const p = i / (DAYS - 1);
     let mult;
     switch (shape) {
-      case 'saturated': mult = 1 + (p < 0.5 ? p * 0.6 : 0.3 + Math.sin(p * 7) * 0.015); break; // 漲完走平
+      case 'saturated': mult = 1 + (p < 0.5 ? p * 0.6 : 0.3 - (p - 0.5) * 0.16); break; // 漲完見頂、緩步回落 → 背離
       case 'accel':     mult = 1 + Math.pow(p, 1.6) * 0.5; break;
       case 'fading':    mult = 1 + (p < 0.3 ? p * 0.7 : 0.21 - (p - 0.3) * 0.35); break;
       case 'new':       mult = 1 + (i >= DAYS - 3 ? (i - (DAYS - 4)) * 0.05 : p * 0.03); break;
@@ -687,7 +687,7 @@ async function loadLive() {
     if (!res.ok) return false;
     const json = await res.json();
     if (!json.tickers || !json.tickers.length) return false;
-    MODE = 'live'; HAS_PRICE = false;
+    MODE = 'live'; HAS_PRICE = !!json.has_price;
     DAYS = json.dates.length;
     SRC_LIST = json.sources.slice();
     SRC_LABEL = {}; SRC_LIST.forEach(s => SRC_LABEL[s] = s);
