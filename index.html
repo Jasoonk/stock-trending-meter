@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>注意力生命週期儀表板</title>
+<title>股票板塊熱度儀表板</title>
 <style>
   :root {
     --bg: #0e1116;
@@ -245,7 +245,7 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <h1><span class="logo-dot"></span>注意力生命週期儀表板</h1>
+    <h1><span class="logo-dot"></span>股票板塊熱度儀表板</h1>
     <div class="controls">
       <div class="seg" id="sourceSeg">
         <button data-src="live" class="active">即時</button>
@@ -379,6 +379,7 @@ let seedT = 0;                 // mock：每次 refresh 遞增，讓雜訊變動
 let MODE = 'mock';             // 'live'（讀 data.json）或 'mock'（P0 內建假資料）
 let HAS_PRICE = true;          // live（僅提及）沒有價格 → 關閉背離旗標與股價疊圖
 let GENERATED_AT = null;       // 資料產生時間
+let AXIS_DATES = [];           // 每日日期軸（給疊圖 x 軸刻度）
 let SRC_LIST = ['reddit', 'stocktwits', 'trends'];  // 來源鍵
 let SRC_LABEL = { reddit: 'Reddit (r/wallstreetbets)', stocktwits: 'StockTwits', trends: 'Google Trends' };
 const SRC_COLORS = ['var(--accent)', 'var(--new)', 'var(--sat)', '#a371f7', '#f778ba'];
@@ -599,9 +600,9 @@ function sparkline(vals, w, h, color, fill) {
       stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 
-/* ---- 詳情：注意力 vs 股價 疊圖 ---- */
+/* ---- 詳情：注意力 vs 股價 疊圖（含雙 Y 軸與 X 軸日期刻度）---- */
 function overlayChart(td) {
-  const w = 520, h = 190, padL = 6, padR = 6, padT = 12, padB = 18;
+  const w = 520, h = 202, padL = 42, padR = 46, padT = 12, padB = 24;
   const iw = w - padL - padR, ih = h - padT - padB;
   const attn = td.total;
   const hasPrice = HAS_PRICE && td.price;
@@ -613,17 +614,29 @@ function overlayChart(td) {
   const x = i => padL + (i / (DAYS - 1)) * iw;
   const yA = v => padT + ih - ((v - aMin) / aR) * ih;
   const yP = v => padT + ih - ((v - pMin) / pR) * ih;
+  const kfmt = n => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(Math.round(n));
+  const pfmt = n => n >= 100 ? n.toFixed(0) : n.toFixed(2);
+  const md = s => s ? s.slice(5).replace('-', '/') : '';
+  const fracs = [0, 0.5, 1];  // 上/中/下
+
   const attnLine = attn.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + yA(v).toFixed(1)).join(' ');
-  const grid = [0.25, 0.5, 0.75].map(g =>
-    `<line x1="${padL}" y1="${padT + ih*g}" x2="${w-padR}" y2="${padT + ih*g}"
+  const grid = fracs.map(g =>
+    `<line x1="${padL}" y1="${(padT + ih*g).toFixed(1)}" x2="${w-padR}" y2="${(padT + ih*g).toFixed(1)}"
       stroke="var(--border)" stroke-dasharray="2 4"/>`).join('');
-  const priceLine = (HAS_PRICE && price)
+  const yTicksA = fracs.map(g =>
+    `<text x="${padL-5}" y="${(padT + ih*g + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--accent)">${kfmt(aMax - g*aR)}</text>`).join('');
+  const yTicksP = hasPrice ? fracs.map(g =>
+    `<text x="${w-padR+5}" y="${(padT + ih*g + 3).toFixed(1)}" text-anchor="start" font-size="10" fill="var(--sat)">${pfmt(pMax - g*pR)}</text>`).join('') : '';
+  const xIdx = [0, Math.floor((DAYS-1)/2), DAYS-1];
+  const xTicks = xIdx.map((i, k) =>
+    `<text x="${x(i).toFixed(1)}" y="${h-7}" text-anchor="${k===0?'start':k===2?'end':'middle'}" font-size="10" fill="var(--text-faint)">${md(AXIS_DATES[i])}</text>`).join('');
+  const priceLine = hasPrice
     ? `<path d="${price.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + yP(v).toFixed(1)).join(' ')}"
         fill="none" stroke="var(--sat)" stroke-width="2" stroke-dasharray="5 3" stroke-linejoin="round"/>`
     : '';
   return `<svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
-    ${grid}
-    <path d="${attnLine} L${x(DAYS-1)},${padT+ih} L${padL},${padT+ih} Z" fill="var(--accent)" opacity="0.10"/>
+    ${grid}${yTicksA}${yTicksP}${xTicks}
+    <path d="${attnLine} L${x(DAYS-1).toFixed(1)},${(padT+ih).toFixed(1)} L${padL},${(padT+ih).toFixed(1)} Z" fill="var(--accent)" opacity="0.10"/>
     <path d="${attnLine}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
     ${priceLine}
   </svg>`;
@@ -764,6 +777,9 @@ function rebuildMock() {
   SRC_LABEL = { reddit: 'Reddit (r/wallstreetbets)', stocktwits: 'StockTwits', trends: 'Google Trends' };
   seedT++;
   DATA = UNIVERSE.map(buildTicker);
+  AXIS_DATES = Array.from({ length: DAYS }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (DAYS - 1 - i)); return d.toISOString().slice(0, 10);
+  });
   MARKET = synthMarket();
   GENERATED_AT = new Date().toISOString();
   enrich();
@@ -778,6 +794,7 @@ async function loadLive() {
     if (!json.tickers || !json.tickers.length) return false;
     MODE = 'live'; HAS_PRICE = !!json.has_price;
     DAYS = json.dates.length;
+    AXIS_DATES = json.dates.slice();
     SRC_LIST = json.sources.slice();
     SRC_LABEL = {}; SRC_LIST.forEach(s => SRC_LABEL[s] = s);
     GENERATED_AT = json.generated_at;
