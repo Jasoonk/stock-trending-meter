@@ -171,6 +171,30 @@
     .fg-gauge { width: 100%; max-width: 260px; margin: 0 auto; }
     .fg-rating { margin-left: 0; }
   }
+
+  /* 題材生命週期 */
+  .themes-block { margin-bottom: 18px; }
+  .themes-head { font-size: 14px; font-weight: 700; margin: 0 0 10px; display: flex; align-items: baseline; gap: 10px; }
+  .themes-sub { font-size: 11.5px; color: var(--text-faint); font-weight: 400; }
+  .themes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .theme-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 11px;
+    box-shadow: var(--shadow); padding: 12px 14px;
+  }
+  .theme-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .theme-name { font-weight: 700; font-size: 13.5px; }
+  .theme-top .stage-pill { margin-left: auto; font-size: 11px; }
+  .theme-metrics { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+  .theme-mentions { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .theme-chg { font-size: 12.5px; font-weight: 700; }
+  .theme-spark { margin-bottom: 8px; }
+  .theme-members { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tchip {
+    font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 5px;
+    background: var(--panel-2); color: var(--text-dim); cursor: pointer; border: 1px solid transparent;
+  }
+  .tchip:hover { border-color: var(--accent); color: var(--accent); }
+  .tchip.dim { opacity: .38; }
   .chg-pos { color: var(--new); }
   .chg-neg { color: var(--danger); }
   .flag-hot {
@@ -256,6 +280,11 @@
     </div>
   </div>
 
+  <div class="themes-block" id="themesBlock" style="display:none">
+    <div class="themes-head">🧩 題材生命週期 <span class="themes-sub">成分股加權提及聚合</span></div>
+    <div class="themes-grid" id="themesGrid"></div>
+  </div>
+
   <div class="table-wrap">
     <div class="table-scroll">
       <table>
@@ -263,7 +292,7 @@
           <tr id="headRow">
             <th class="sortable" data-key="ticker">標的 <span class="arrow">▾</span></th>
             <th class="sortable" data-key="stageOrder">階段 <span class="arrow">▾</span></th>
-            <th class="sortable sorted" data-key="mentions7">提及(<span class="win-label">7</span>d) <span class="arrow">▾</span></th>
+            <th class="sortable sorted" data-key="mentions7" title="來源加權後分數（Σ 來源×權重）">提及(<span class="win-label">7</span>d)⚖ <span class="arrow">▾</span></th>
             <th class="sortable" data-key="weekChange">週變化 <span class="arrow">▾</span></th>
             <th class="sortable" data-key="daysAtHigh">高位天數 <span class="arrow">▾</span></th>
             <th>迷你趨勢</th>
@@ -297,6 +326,27 @@ const CFG = {
   DIVERGE_DAYS: 8,      // 背離：檢視價格是否已走平/反轉的視窗
   MIN_OBS: 8            // 觀察天數不足此值 → 標記「暖身中」，不做四階段分類
 };
+
+// 多來源加權：不同子版信號品質不同（手調初值，待 P3 校準）。未列者權重 1.0。
+// 立意：跨越更多社群的關注 = 較廣、較不只是單一 meme 版 → 給較高權重。
+const SOURCE_WEIGHTS = {
+  'r/wallstreetbets': 1.0,   // 基準：retail 群眾熱度/froth 的核心來源
+  'r/stocks': 1.3,           // 較理性、跨版佐證 → 訊號較實
+  'r/options': 1.15          // 選擇權討論常領先價格
+};
+
+// 題材籃子：用成分股的加權提及聚合成題材熱度，套用同一套生命週期分類。
+// 只會聚合到「目前在榜」的成分股（未進前 N 名的成分股不在 data.json 內）。
+const THEMES = [
+  { name: 'AI 晶片/硬體', tickers: ['NVDA','AMD','SMCI','AVGO','MU','TSM','ARM','MRVL','SNDK','INTC'] },
+  { name: 'AI 軟體/雲',   tickers: ['MSFT','GOOG','GOOGL','META','ORCL','PLTR','NOW','CRWD','AMZN','SNOW'] },
+  { name: '量子運算',      tickers: ['RGTI','IONQ','QBTS','QUBT'] },
+  { name: '核能/SMR',      tickers: ['OKLO','SMR','NNE','CEG','VST','GEV'] },
+  { name: '太空',          tickers: ['RKLB','ASTS','LUNR','SPCX','RDW'] },
+  { name: '加密/區塊鏈',   tickers: ['COIN','MSTR','HOOD','MARA','RIOT','BITF','BMNR'] },
+  { name: '大盤 ETF',      tickers: ['SPY','QQQ','VOO','IWM','DIA'] }
+];
+let THEMES_DATA = [];
 
 const STAGE_META = {
   New:          { icon: '🌱', label: '新',   order: 1 },
@@ -656,8 +706,20 @@ let sortDir = -1; // -1 降冪
 let win = 7;
 let expanded = null;
 
+// 依 SOURCE_WEIGHTS 把各來源加權加總成注意力分數（對齊 DAYS）
+function weightedTotal(sources) {
+  const arr = new Array(DAYS).fill(0);
+  SRC_LIST.forEach(s => {
+    const w = SOURCE_WEIGHTS[s] ?? 1;
+    const a = sources[s] || [];
+    for (let i = 0; i < DAYS; i++) arr[i] += (a[i] || 0) * w;
+  });
+  return arr.map(v => Math.round(v));
+}
+
 // 共用管線：不論資料來自 live 或 mock，都用同一套排名/指標/分類
 function enrich() {
+  DATA.forEach(td => { td.total = weightedTotal(td.sources); }); // 多來源加權
   const ranks = computeRanks(DATA);
   DATA.forEach((td, i) => {
     td.rankSeries = ranks[i];
@@ -665,6 +727,33 @@ function enrich() {
     td.cls = classify(td, td.metrics, ranks[i]);
     td.stageOrder = STAGE_META[td.cls.stage].order;
     td.rank = ranks[i][DAYS - 1];
+  });
+}
+
+// 題材：把成分股（目前在榜者）的各來源提及聚合，套用同一套加權/排名/分類
+function buildThemes() {
+  const byTicker = {};
+  DATA.forEach(d => { byTicker[d.ticker] = d; });
+  THEMES_DATA = THEMES.map(th => {
+    const members = th.tickers.map(t => byTicker[t]).filter(Boolean);
+    const sources = {};
+    SRC_LIST.forEach(s => { sources[s] = new Array(DAYS).fill(0); });
+    members.forEach(m => SRC_LIST.forEach(s => {
+      const a = m.sources[s] || [];
+      for (let i = 0; i < DAYS; i++) sources[s][i] += (a[i] || 0);
+    }));
+    return {
+      ticker: th.name, isTheme: true, sources, price: null,
+      allTickers: th.tickers, activeTickers: members.map(m => m.ticker)
+    };
+  });
+  THEMES_DATA.forEach(t => { t.total = weightedTotal(t.sources); });
+  const ranks = computeRanks(THEMES_DATA);
+  THEMES_DATA.forEach((t, i) => {
+    t.rankSeries = ranks[i];
+    t.metrics = computeMetrics(t, win);
+    t.cls = classify(t, t.metrics, ranks[i]);
+    t.rank = ranks[i][DAYS - 1];
   });
 }
 
@@ -735,7 +824,48 @@ function render() {
   renderMarket();
   renderBanner();
   renderAlerts();
+  buildThemes();
+  renderThemes();
   renderTable();
+}
+
+function renderThemes() {
+  const block = document.getElementById('themesBlock');
+  const grid = document.getElementById('themesGrid');
+  const active = THEMES_DATA.filter(t => t.activeTickers.length > 0 && t.metrics.mentionsWin > 0);
+  if (!active.length) { block.style.display = 'none'; return; }
+  block.style.display = '';
+  active.sort((a, b) => b.metrics.mentionsWin - a.metrics.mentionsWin);
+  grid.innerHTML = active.map(t => {
+    const meta = STAGE_META[t.cls.stage];
+    const warming = t.cls.stage === 'Warming';
+    const wc = t.metrics.weekChange;
+    const chg = warming ? '<span style="color:var(--text-faint)">—</span>'
+      : `<span class="theme-chg ${wc >= 0 ? 'chg-pos' : 'chg-neg'}">${wc >= 0 ? '+' : ''}${(wc * 100).toFixed(0)}%</span>`;
+    const col = t.cls.stage === 'Fading' ? 'var(--fade)' : t.cls.stage === 'Saturated' ? 'var(--sat)'
+      : t.cls.stage === 'New' ? 'var(--new)' : warming ? '#b083f0' : 'var(--accent)';
+    const chips = t.allTickers.map(tk => {
+      const on = t.activeTickers.includes(tk);
+      return `<span class="tchip${on ? '' : ' dim'}"${on ? ` data-jump="${tk}"` : ''}>${tk}</span>`;
+    }).join('');
+    return `<div class="theme-card">
+      <div class="theme-top"><span class="theme-name">${t.ticker}</span>
+        <span class="stage-pill stage-${t.cls.stage}">${meta.icon} ${meta.label}</span></div>
+      <div class="theme-metrics"><span class="theme-mentions">${fmt(t.metrics.mentionsWin)}</span>${chg}
+        <span style="font-size:11px;color:var(--text-faint);margin-left:auto">${t.activeTickers.length}/${t.allTickers.length} 檔在榜</span></div>
+      <div class="theme-spark">${sparkline(t.total.slice(win === 7 ? -10 : -30), 200, 30, col, true)}</div>
+      <div class="theme-members">${chips}</div>
+    </div>`;
+  }).join('');
+  grid.querySelectorAll('.tchip[data-jump]').forEach(el => {
+    el.onclick = () => {
+      const tk = el.getAttribute('data-jump');
+      expanded = tk;
+      renderTable();
+      const row = document.querySelector(`tr[data-ticker="${tk}"]`);
+      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  });
 }
 
 function renderBanner() {
@@ -856,15 +986,17 @@ function detailRow(d) {
   const sum = k => (d.sources[k] || []).slice(DAYS - win).reduce((a, b) => a + b, 0);
   const vals = SRC_LIST.map(sum);
   const tot = vals.reduce((a, b) => a + b, 0) || 1;
-  const srcBar = (label, val, color) => {
+  const srcBar = (label, val, color, w) => {
     const pct = (val / tot * 100);
+    const wtag = (w && w !== 1) ? ` <span style="color:var(--text-faint)">×${w}</span>` : '';
     return `<div class="src-row">
-      <div class="src-head"><span>${label}</span><span>${fmt(val)} · ${pct.toFixed(0)}%</span></div>
+      <div class="src-head"><span>${label}${wtag}</span><span>${fmt(val)} · ${pct.toFixed(0)}%</span></div>
       <div class="src-track"><div class="src-fill" style="width:${pct}%;background:${color}"></div></div>
     </div>`;
   };
   const srcBars = SRC_LIST.map((k, i) =>
-    srcBar(SRC_LABEL[k] || k, vals[i], SRC_COLORS[i % SRC_COLORS.length])).join('');
+    srcBar(SRC_LABEL[k] || k, vals[i], SRC_COLORS[i % SRC_COLORS.length], SOURCE_WEIGHTS[k] ?? 1)).join('')
+    + `<div style="font-size:11px;color:var(--text-faint);margin-top:7px">上方為各來源原始提及；表格「提及」欄為加權後分數（Σ 來源×權重）</div>`;
 
   const hasPrice = HAS_PRICE && d.price;
   const priceChg = hasPrice
