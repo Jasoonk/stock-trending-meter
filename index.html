@@ -172,6 +172,22 @@
     .fg-rating { margin-left: 0; }
   }
 
+  /* 市場列（恐慌貪婪 + 散戶獲利） */
+  .market-row { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; align-items: stretch; }
+  .market-row .market-card { margin-bottom: 18px; }
+  @media (max-width: 860px) { .market-row { grid-template-columns: 1fr; } }
+  .retail-card { flex-direction: column; align-items: stretch; gap: 0; }
+  .rt-title { font-weight: 700; font-size: 14px; display: flex; align-items: baseline; gap: 8px; }
+  .rt-title small { font-size: 11px; color: var(--text-faint); font-weight: 400; }
+  .rt-big { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.15; margin: 6px 0 2px; }
+  .rt-sub { font-size: 12px; color: var(--text-dim); }
+  .rt-bar { height: 9px; border-radius: 6px; background: var(--panel-2); overflow: hidden; margin: 11px 0 5px; display: flex; }
+  .rt-bar i { display: block; height: 100%; }
+  .rt-legend { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-faint); }
+  .rt-hint { font-size: 12.5px; font-weight: 600; margin-top: 9px; }
+  .rt-warm { font-size: 12.5px; color: #b083f0; font-weight: 600; }
+  .rt-note { font-size: 11px; color: var(--text-faint); margin-top: 9px; line-height: 1.5; }
+
   /* 題材生命週期 */
   .themes-block { margin-bottom: 18px; }
   .themes-head { font-size: 14px; font-weight: 700; margin: 0 0 10px; display: flex; align-items: baseline; gap: 10px; }
@@ -265,7 +281,10 @@
     分類由第 7 節規則即時計算 · <span class="updated" id="modeBadge"></span>
   </div>
 
-  <div class="market-card" id="marketCard" style="display:none"></div>
+  <div class="market-row">
+    <div class="market-card" id="marketCard" style="display:none"></div>
+    <div class="market-card retail-card" id="retailCard" style="display:none"></div>
+  </div>
 
   <div class="warmup-banner" id="warmupBanner" style="display:none"></div>
 
@@ -295,6 +314,7 @@
             <th class="sortable sorted" data-key="mentions7" title="來源加權後分數（Σ 來源×權重）">提及(<span class="win-label">7</span>d)⚖ <span class="arrow">▾</span></th>
             <th class="sortable" data-key="weekChange">週變化 <span class="arrow">▾</span></th>
             <th class="sortable" data-key="daysAtHigh">高位天數 <span class="arrow">▾</span></th>
+            <th class="sortable" data-key="retailPnl" title="現價 vs 注意力加權成本（代理指標）">散戶損益 <span class="arrow">▾</span></th>
             <th>迷你趨勢</th>
           </tr>
         </thead>
@@ -523,6 +543,42 @@ function divergenceFlag(td) {
   return attnHigh && priceChg <= 0.01; // 注意力高、價格沒跟上 → 過熱背離
 }
 
+/* ---- 散戶獲利指標（注意力加權成本 vs 現價）----
+   假設：某日的提及量 ≈ 當日湧入的關注/參與度 → 以提及量加權平均當日股價，
+         得出「平均而言，關注這檔的群眾在什麼價位進場」（類比加密圈的 realized price）。
+   ⚠ 這是代理指標，不是真實損益：我們沒有持倉、成本、下單流資料。
+      提及≠買進（含看空/賣權/套牢抱怨），也沒有部位大小與賣出。 */
+function retailCost(td) {
+  if (!HAS_PRICE || !td.price) return null;
+  let wsum = 0, psum = 0, days = 0;
+  for (let i = 0; i < DAYS; i++) {
+    const m = td.total[i] || 0;
+    const p = td.price[i];
+    if (m > 0 && p != null) { wsum += m; psum += m * p; days++; }
+  }
+  if (!wsum || days < 2) return null;
+  const awap = psum / wsum;
+  const now = td.price[DAYS - 1];
+  return { awap, days, attention: wsum, pnl: (now - awap) / awap };
+}
+
+// 市場級：以各檔的注意力量加權平均其損益
+function retailAggregate() {
+  const rows = DATA.map(d => d.retail).filter(Boolean);
+  if (!rows.length) return null;
+  let W = 0, S = 0, under = 0, maxDays = 0;
+  rows.forEach(r => {
+    W += r.attention; S += r.attention * r.pnl;
+    if (r.pnl < 0) under += r.attention;
+    maxDays = Math.max(maxDays, r.days);
+  });
+  if (!W) return null;
+  return {
+    pnl: S / W, underShare: under / W, n: rows.length,
+    days: maxDays, ready: maxDays >= CFG.MIN_OBS
+  };
+}
+
 /* ---- 階段分類（第 7 節規則） ---- */
 function observedDays(td) { // 視窗內實際有資料（>0）的最長尾段天數
   let first = td.total.findIndex(v => v > 0);
@@ -634,11 +690,18 @@ function overlayChart(td) {
     ? `<path d="${price.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + yP(v).toFixed(1)).join(' ')}"
         fill="none" stroke="var(--sat)" stroke-width="2" stroke-dasharray="5 3" stroke-linejoin="round"/>`
     : '';
+  // 群眾加權成本線（散戶獲利指標的視覺化）
+  const rc = td.retail;
+  const costLine = (hasPrice && rc && rc.awap >= pMin && rc.awap <= pMax)
+    ? `<line x1="${padL}" y1="${yP(rc.awap).toFixed(1)}" x2="${w-padR}" y2="${yP(rc.awap).toFixed(1)}"
+         stroke="#b083f0" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.95"/>
+       <text x="${padL+4}" y="${(yP(rc.awap)-4).toFixed(1)}" font-size="9.5" fill="#b083f0">群眾成本 ${pfmt(rc.awap)}</text>`
+    : '';
   return `<svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
     ${grid}${yTicksA}${yTicksP}${xTicks}
     <path d="${attnLine} L${x(DAYS-1).toFixed(1)},${(padT+ih).toFixed(1)} L${padL},${(padT+ih).toFixed(1)} Z" fill="var(--accent)" opacity="0.10"/>
     <path d="${attnLine}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
-    ${priceLine}
+    ${priceLine}${costLine}
   </svg>`;
 }
 
@@ -740,6 +803,7 @@ function enrich() {
     td.cls = classify(td, td.metrics, ranks[i]);
     td.stageOrder = STAGE_META[td.cls.stage].order;
     td.rank = ranks[i][DAYS - 1];
+    td.retail = retailCost(td);
   });
 }
 
@@ -837,8 +901,39 @@ function recomputeWindow() {
 
 function fmt(n) { return n.toLocaleString('en-US'); }
 
+function renderRetail() {
+  const el = document.getElementById('retailCard');
+  const a = retailAggregate();
+  if (!a) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const p = a.pnl * 100;
+  const col = p >= 0 ? 'var(--new)' : 'var(--danger)';
+  const underPct = a.underShare * 100;
+  const hint = !a.ready ? ''
+    : p <= -15 ? '多數關注者深度套牢 → 反彈易有解套賣壓'
+    : p >= 15 ? '群眾帳面獲利豐厚 → 留意獲利了結壓力'
+    : '';
+  const body = a.ready ? `
+      <div class="rt-big" style="color:${col}">${p >= 0 ? '+' : ''}${p.toFixed(1)}%</div>
+      <div class="rt-sub">關注群眾相對其加權成本的帳面損益</div>
+      <div class="rt-bar">
+        <i style="width:${(100-underPct).toFixed(1)}%;background:var(--new)"></i>
+        <i style="width:${underPct.toFixed(1)}%;background:var(--danger)"></i>
+      </div>
+      <div class="rt-legend"><span>獲利 ${(100-underPct).toFixed(0)}%</span><span>套牢 ${underPct.toFixed(0)}%</span></div>
+      ${hint ? `<div class="rt-hint" style="color:${col}">⚠ ${hint}</div>` : ''}`
+    : `<div class="rt-big" style="color:var(--text-faint)">—</div>
+       <div class="rt-warm">⏳ 需 ≥ ${CFG.MIN_OBS} 天提及歷史才有意義（目前 ${a.days} 天）</div>
+       <div class="rt-note">歷史太短時，加權成本 ≈ 現價，指標必然趨近 0，顯示數字會造成假精確。</div>`;
+  el.innerHTML = `
+    <div class="rt-title">💰 散戶獲利指標 <small>注意力加權成本 · ${a.n} 檔</small></div>
+    ${body}
+    <div class="rt-note">代理指標，非真實損益：以每日提及量加權當日股價估算群眾平均成本。提及≠買進，未含部位大小與賣出。</div>`;
+}
+
 function render() {
   renderMarket();
+  renderRetail();
   renderBanner();
   renderAlerts();
   buildThemes();
@@ -945,6 +1040,10 @@ function sortData() {
       case 'mentions7': av = a.metrics.mentionsWin; bv = b.metrics.mentionsWin; break;
       case 'weekChange': av = a.metrics.weekChange; bv = b.metrics.weekChange; break;
       case 'daysAtHigh': av = a.cls.dah; bv = b.cls.dah; break;
+      case 'retailPnl':
+        av = a.retail ? a.retail.pnl : (sortDir < 0 ? -Infinity : Infinity);
+        bv = b.retail ? b.retail.pnl : (sortDir < 0 ? -Infinity : Infinity);
+        break;
       default: av = 0; bv = 0;
     }
     return sortDir * (av - bv);
@@ -975,6 +1074,9 @@ function renderTable() {
       <td>${fmt(d.metrics.mentionsWin)}</td>
       <td>${wcCell}</td>
       <td>${dahCell}</td>
+      <td>${d.retail
+        ? `<span class="${d.retail.pnl>=0?'chg-pos':'chg-neg'}">${d.retail.pnl>=0?'+':''}${(d.retail.pnl*100).toFixed(1)}%</span>`
+        : '<span style="color:var(--text-faint)">—</span>'}</td>
       <td style="text-align:right">${sparkline(d.total.slice(win === 7 ? -10 : -30), 88, 26, sparkColor, false)}</td>
     </tr>`;
     if (expanded === d.ticker) html += detailRow(d);
@@ -1023,11 +1125,12 @@ function detailRow(d) {
   const legend = hasPrice
     ? `<span><i style="background:var(--accent)"></i>跨平台提及數</span>
        <span><i style="background:var(--sat)"></i>股價</span>
+       ${d.retail ? '<span><i style="background:#b083f0"></i>群眾加權成本</span>' : ''}
        <span style="margin-left:auto;color:var(--text-faint)">價格近 ${win} 日 ${priceChg>=0?'+':''}${priceChg.toFixed(1)}%</span>`
     : `<span><i style="background:var(--accent)"></i>跨平台提及數</span>
        <span style="margin-left:auto;color:var(--text-faint)">股價疊圖為 P2 功能（尚未接入）</span>`;
 
-  return `<tr class="detail-row"><td colspan="6"><div class="detail">
+  return `<tr class="detail-row"><td colspan="7"><div class="detail">
     <div>
       <div class="reason">
         <div class="r-title">${STAGE_META[d.cls.stage].icon} 分類理由 — ${STAGE_META[d.cls.stage].label}${d.cls.hot ? ' <span class="flag-hot">過熱背離</span>' : ''}</div>
@@ -1045,6 +1148,11 @@ function detailRow(d) {
         <div class="metric"><div class="m-label">週變化率</div><div class="m-val ${d.metrics.weekChange>=0?'chg-pos':'chg-neg'}">${d.metrics.weekChange>=0?'+':''}${(d.metrics.weekChange*100).toFixed(0)}%</div></div>
         <div class="metric"><div class="m-label">目前排名</div><div class="m-val">#${d.rank ?? '—'}</div></div>
         <div class="metric"><div class="m-label">高位停留</div><div class="m-val">${d.cls.dah} 天</div></div>
+        ${d.retail ? `<div class="metric" style="grid-column:1/-1">
+          <div class="m-label">散戶獲利代理（現價 vs 群眾加權成本 ${d.retail.awap.toFixed(2)}）</div>
+          <div class="m-val ${d.retail.pnl>=0?'chg-pos':'chg-neg'}">${d.retail.pnl>=0?'+':''}${(d.retail.pnl*100).toFixed(1)}%
+            <small style="font-size:11px;font-weight:400;color:var(--text-faint)"> · ${d.retail.days} 天樣本</small></div>
+        </div>` : ''}
       </div>
       <h4>各來源分解（近 ${win} 天）</h4>
       <div class="src-bars">${srcBars}</div>
