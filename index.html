@@ -326,6 +326,7 @@
   <footer>
     <div class="disclaimer">⚠ 決策輔助儀表板，不是自動下單機。它浮出訊號，人做決定。非投資建議。</div>
     <div>訊號會很吵，儀表板的價值是「提醒你去看」，不是「告訴你買」。注意力 ≠ 方向。門檻（X／threshold／N／D）為手調初值，須以樣本外回測校準。</div>
+    <div id="provenance" style="margin-top:6px"></div>
   </footer>
 </div>
 
@@ -400,6 +401,8 @@ let MODE = 'mock';             // 'live'（讀 data.json）或 'mock'（P0 內�
 let HAS_PRICE = true;          // live（僅提及）沒有價格 → 關閉背離旗標與股價疊圖
 let GENERATED_AT = null;       // 資料產生時間
 let AXIS_DATES = [];           // 每日日期軸（給疊圖 x 軸刻度）
+let PARAM_VERSION = null;      // 產生權威標籤的參數版本（來自 data.json）
+let LABEL_MISMATCH = 0;        // 前端計算 vs 後端權威標籤的不一致數（應為 0）
 let SRC_LIST = ['reddit', 'stocktwits', 'trends'];  // 來源鍵
 let SRC_LABEL = { reddit: 'Reddit (r/wallstreetbets)', stocktwits: 'StockTwits', trends: 'Google Trends' };
 const SRC_COLORS = ['var(--accent)', 'var(--new)', 'var(--sat)', '#a371f7', '#f778ba'];
@@ -801,6 +804,18 @@ function enrich() {
     td.rankSeries = ranks[i];
     td.metrics = computeMetrics(td, win);
     td.cls = classify(td, td.metrics, ranks[i]);
+    // 後端 classify.py 為單一真相：畫面必須與被凍結、被回測的標籤一致。
+    // 兩者理應完全相同（已交叉驗證）；若不同則以後端為準並記錄，避免無聲漂移。
+    if (td.serverStage) {
+      if (td.serverStage !== td.cls.stage) {
+        LABEL_MISMATCH++;
+        console.warn(`階段標籤不一致 ${td.ticker}: 前端=${td.cls.stage} 後端=${td.serverStage}（以後端為準）`);
+        td.cls.reasons = [`⚠ 前端計算(${td.cls.stage})與後端權威標籤不一致，已採用後端結果`]
+          .concat(td.cls.reasons);
+        td.cls.stage = td.serverStage;
+      }
+      td.cls.hot = td.serverHot;
+    }
     td.stageOrder = STAGE_META[td.cls.stage].order;
     td.rank = ranks[i][DAYS - 1];
     td.retail = retailCost(td);
@@ -863,15 +878,29 @@ async function loadLive() {
     SRC_LABEL = {}; SRC_LIST.forEach(s => SRC_LABEL[s] = s);
     GENERATED_AT = json.generated_at;
     MARKET = (json.market && json.market.fear_greed) ? json.market : null;
+    PARAM_VERSION = json.param_version || null;
     DATA = json.tickers.map(t => ({
       ticker: t.ticker, name: t.name || t.ticker, first_seen: t.first_seen,
-      total: t.total, sources: t.sources, price: t.price || null
+      total: t.total, sources: t.sources, price: t.price || null,
+      serverStage: t.stage || null, serverHot: !!t.hot
     }));
     enrich();
     return true;
   } catch (e) {
     console.warn('讀取 data.json 失敗，回退 mock：', e.message);
     return false;
+  }
+}
+
+function updateProvenance() {
+  const el = document.getElementById('provenance');
+  if (!el) return;
+  if (MODE === 'live' && PARAM_VERSION) {
+    el.innerHTML = `階段標籤由 <code>classify.py</code> 產生並每日凍結於 <code>stage_history</code>（參數版本 <code>${PARAM_VERSION}</code>）`
+      + `，供 P3 樣本外回測使用。`
+      + (LABEL_MISMATCH ? ` <span style="color:var(--danger)">⚠ ${LABEL_MISMATCH} 檔前後端標籤不一致</span>` : '');
+  } else {
+    el.innerHTML = `<code>範例</code>模式：標籤由前端即時計算，未凍結、不進回測。`;
   }
 }
 
@@ -893,6 +922,7 @@ async function boot() {
   setSourceButtons();
   render();
   updateBadge();
+  updateProvenance();
 }
 
 function recomputeWindow() {
@@ -1185,6 +1215,7 @@ document.getElementById('sourceSeg').addEventListener('click', async e => {
   expanded = null;
   render();
   updateBadge();
+  updateProvenance();
 });
 
 function setSourceButtons() {
@@ -1213,6 +1244,7 @@ document.getElementById('refreshBtn').addEventListener('click', async e => {
   }
   render();
   updateBadge();
+  updateProvenance();
   btn.classList.remove('loading');
 });
 

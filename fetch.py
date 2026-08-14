@@ -22,6 +22,8 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 
+import classify as clf
+
 # Windows 主控台預設 cp1252 印不出中文；強制 UTF-8（CI 的 Ubuntu 本就 UTF-8）
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -201,6 +203,34 @@ def init_db(conn):
             UNIQUE(ticker, date)
         );
         CREATE INDEX IF NOT EXISTS idx_prices_ticker ON prices(ticker);
+
+        -- 每日凍結的階段標籤（P3 回測的原料）。沒有這張表就無法驗證 edge。
+        CREATE TABLE IF NOT EXISTS stage_history (
+            ticker        TEXT NOT NULL,
+            date          TEXT NOT NULL,
+            stage         TEXT NOT NULL,
+            stage_since   TEXT,        -- 進入目前階段的日期
+            week_change   REAL,
+            jump_x        REAL,
+            rank          INTEGER,
+            days_at_high  INTEGER,
+            mentions      REAL,        -- 當日加權注意力分數
+            price         REAL,        -- 標記當下收盤（用來算前瞻報酬）
+            hot           INTEGER,     -- 過熱背離旗標
+            observed_days INTEGER,
+            param_version TEXT NOT NULL,
+            UNIQUE(ticker, date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_stage_date ON stage_history(date);
+        CREATE INDEX IF NOT EXISTS idx_stage_ticker ON stage_history(ticker);
+        CREATE INDEX IF NOT EXISTS idx_stage_stage ON stage_history(stage);
+
+        -- 參數版本：門檻一改就換版本，回測時必須依此分段
+        CREATE TABLE IF NOT EXISTS param_versions (
+            version     TEXT PRIMARY KEY,
+            config_json TEXT NOT NULL,
+            first_used  TEXT NOT NULL
+        );
         """
     )
     conn.commit()
@@ -251,6 +281,51 @@ def build_price_array(sorted_closes, dates):
             j += 1
         arr.append(last)
     return arr if all(v is not None for v in arr) else None
+
+
+def store_stages(conn, stages, today_s):
+    """
+    把當日階段標籤凍結進 stage_history，並記錄參數版本。
+    stage_since：沿用昨日標籤，階段不變則延續、改變則設為今天。
+    """
+    ver = clf.param_version()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO param_versions (version, config_json, first_used) VALUES (?,?,?)",
+        (ver, json.dumps(clf.PARAMS, sort_keys=True, ensure_ascii=False), today_s),
+    )
+
+    # 取每檔最近一次（今天以前）的標籤，用來延續 stage_since
+    prev = {}
+    cur.execute(
+        "SELECT ticker, stage, stage_since FROM stage_history WHERE date = "
+        "(SELECT MAX(date) FROM stage_history WHERE date < ?)", (today_s,)
+    )
+    for tk, st, since in cur.fetchall():
+        prev[tk] = (st, since)
+
+    changed = 0
+    for tk, d in stages.items():
+        pst, psince = prev.get(tk, (None, None))
+        if pst == d["stage"] and psince:
+            since = psince
+        else:
+            since = today_s
+            if pst is not None:
+                changed += 1
+        cur.execute(
+            "INSERT OR REPLACE INTO stage_history (ticker, date, stage, stage_since, "
+            "week_change, jump_x, rank, days_at_high, mentions, price, hot, "
+            "observed_days, param_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (tk, today_s, d["stage"], since, d["week_change"], d["jump_x"], d["rank"],
+             d["days_at_high"], d["mentions"], d["price"], int(bool(d["hot"])),
+             d["observed_days"], ver),
+        )
+        # 同步 tickers 表（原本閒置的欄位，現在有真實用途）
+        cur.execute("UPDATE tickers SET current_stage=?, stage_since=? WHERE ticker=?",
+                    (d["stage"], since, tk))
+    conn.commit()
+    return ver, changed
 
 
 def export_json(conn, today, fg=None):
@@ -346,6 +421,14 @@ def export_json(conn, today, fg=None):
             }
         )
 
+    # 階段分類（Python 為單一真相）→ 注入 data.json 供前端顯示，並回傳供凍結
+    stages = clf.classify_all(out_tickers, EXPORT_DAYS)
+    for t in out_tickers:
+        s = stages.get(t["ticker"])
+        if s:
+            t["stage"] = s["stage"]
+            t["hot"] = bool(s["hot"])
+
     payload = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "source_mode": "apewisdom",
@@ -355,9 +438,11 @@ def export_json(conn, today, fg=None):
         "tickers": out_tickers,
         "market": {"fear_greed": fg} if fg else {},
         "has_price": any(price_series.get(t) for t in kept),
+        "param_version": clf.param_version(),
+        "params": clf.PARAMS,
     }
     OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return len(out_tickers)
+    return len(out_tickers), stages
 
 
 # --------------------------------------------------------------------------- #
@@ -425,13 +510,20 @@ def main():
                 ("cnn_fear_greed", today_s, fg["score"], fg["rating"]),
             )
             conn.commit()
-        n = export_json(conn, today, fg)
+        n, stages = export_json(conn, today, fg)
+        ver, changed = store_stages(conn, stages, today_s)
         cur = conn.execute("SELECT COUNT(*) FROM snapshots")
         total_rows = cur.fetchone()[0]
+        sh_rows = conn.execute("SELECT COUNT(*) FROM stage_history").fetchone()[0]
+        dist = conn.execute(
+            "SELECT stage, COUNT(*) FROM stage_history WHERE date=? GROUP BY stage "
+            "ORDER BY 2 DESC", (today_s,)).fetchall()
     finally:
         conn.close()
 
-    print(f"完成：snapshots 累積 {total_rows} 筆 → 匯出 data.json（{n} 檔）")
+    print(f"  · 階段標籤已凍結（參數版本 {ver}，{changed} 檔階段變動）："
+          + "、".join(f"{s} {c}" for s, c in dist))
+    print(f"完成：snapshots {total_rows} 筆 / stage_history {sh_rows} 筆 → 匯出 data.json（{n} 檔）")
     return 0
 
 
