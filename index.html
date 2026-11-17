@@ -133,13 +133,13 @@
   .fg-stats { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0; }
   .fg-stat .l { font-size: 11px; color: var(--text-faint); }
   .fg-stat .v { font-size: 15px; font-weight: 700; }
-  @media (max-width: 520px) { .fg { flex-direction: column; align-items: stretch; } .fg-gauge { margin: 0 auto; } }
+  @media (max-width: 520px) { .fg { flex-direction: column; align-items: stretch; } .fg-gauge { flex: none; margin: 0 auto; } }
 
   /* AAII 散戶情緒 */
   .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .row { margin-bottom: 16px; }
-  .aaii-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 22px; align-items: start; }
-  @media (max-width: 860px) { .aaii-grid { grid-template-columns: 1fr; } }
+  .grid-sent { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 860px) { .grid-sent { grid-template-columns: 1fr; } }
   .aaii-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .aaii-band { font-size: 22px; font-weight: 800; }
   .aaii-spread { font-size: 13px; color: var(--text-dim); }
@@ -349,9 +349,8 @@ function aaiiBlock() {
       全部週為 ${pct(br.all.median)}、${(br.all.pos * 100).toFixed(0)}%。${verdict}
       <div class="dim" style="font-size:11px;margin-top:3px">相鄰週的前瞻期間大幅重疊，實際獨立樣本遠少於 ${br.band.n}；只能當背景，不是勝率保證。</div></div>`;
   }
-  return `<div class="card row">
+  return `<div class="card">
     <h2>散戶情緒 <small>AAII 每週調查：「未來 6 個月股市會漲、持平、還是跌？」· ${ymd(a.date)}</small></h2>
-    <div class="aaii-grid"><div>
     <div class="aaii-head">
       <span class="aaii-band" style="color:${BAND_COL[a.band]}">${a.band}</span>
       <span class="aaii-spread">看多−看空 <b class="num ${a.spread >= 0 ? 'pos' : 'neg'}">${sgn(a.spread, 1)}</b>（長期平均 ${sgn(a.avg.spread, 1)}）· 1987 年以來${rank}</span>
@@ -368,7 +367,13 @@ function aaiiBlock() {
     </div>
     <div class="note" style="margin:2px 0 4px">${a.band_desc}${a.streak >= 2 ? ` 已連續 <b>${a.streak}</b> 週${a.spread < 0 ? '看空多於看多' : '看多多於看空'}。` : ''}</div>
     ${brTxt}
-    </div><div>
+  </div>`;
+}
+
+function aaiiChartBlock() {
+  if (!D.aaii) return '';
+  return `<div class="card row">
+    <h2>散戶情緒走勢 <small>AAII 看多／看空比例，每週一筆，1987 年起</small></h2>
     <div class="zoom-bar" style="margin-top:0">
       <div class="seg sm" id="aaiiRange">${AAII_PRESETS.map(([k, l]) => `<button data-k="${k}">${l}</button>`).join('')}</div>
       <span class="zoom-lbl num" id="aaiiRangeLbl"></span>
@@ -377,7 +382,6 @@ function aaiiBlock() {
     <div id="aaiiNav">${aaiiNavSvg()}</div>
     <div class="legend"><span><i style="background:var(--pos)"></i>看多</span><span><i style="background:var(--neg)"></i>看空</span><span>虛線＝1987 年以來平均</span>
       <span>下方時間線：拖曳選範圍 · 拖曳框框平移 · 拉兩側調寬窄 · 滾輪縮放</span></div>
-    </div></div>
   </div>`;
 }
 
@@ -437,7 +441,7 @@ function drawAaii() {
   const span = e - s + 1;
   el.innerHTML = lineChart(
     [{ data: sl(h.bull), color: 'var(--pos)', name: '看多' }, { data: sl(h.bear), color: 'var(--neg)', name: '看空' }],
-    { id: 'aaii', w: NAV.w, h: NAV.w > 400 ? 230 : 190, fmt: v => Math.round(v) + '%', vfmt: v => v.toFixed(1) + '%', dates: sl(h.dates),
+    { id: 'aaii', w: NAV.w, h: NAV.w > 400 ? 250 : 190, fmt: v => Math.round(v) + '%', vfmt: v => v.toFixed(1) + '%', dates: sl(h.dates),
       xfmt: span > 520 ? (d => d.slice(0, 4)) : (d => d.slice(0, 7).replace('-', '/')),
       refs: [{ v: a.avg.bull, color: 'var(--pos)' }, { v: a.avg.bear, color: 'var(--neg)' }],
       extra: i => { const v = h.spread[s + i]; return `<div>看多−看空 <b class="${v >= 0 ? 'pos' : 'neg'}">${sgn(v, 1)}</b></div>`; } });
@@ -656,7 +660,7 @@ function fgBlock() {
   if (!fg) return '';
   const st = (l, v) => v == null ? '' : `<div class="fg-stat"><div class="l">${l}</div><div class="v num">${Math.round(v)}
     <small class="${fg.score - v >= 0 ? 'pos' : 'neg'}">${fg.score - v >= 0 ? '▲' : '▼'}${Math.abs(fg.score - v).toFixed(0)}</small></div></div>`;
-  return `<div class="card row">
+  return `<div class="card">
     <h2>市場情緒 <small>CNN 恐慌貪婪指數（與流動性象限互相參照）</small></h2>
     <div class="fg"><div class="fg-gauge">${gauge(fg.score)}</div>
       <div class="fg-body">
@@ -666,14 +670,21 @@ function fgBlock() {
   </div>`;
 }
 
+/* 市場情緒（左）＋ 散戶情緒讀數（右）；只有一張時佔整排 */
+function sentimentRow() {
+  const cards = [fgBlock(), aaiiBlock()].filter(Boolean);
+  if (!cards.length) return '';
+  return cards.length === 2 ? `<div class="grid-sent">${cards.join('')}</div>` : `<div class="row">${cards[0]}</div>`;
+}
+
 function render() {
   const cur = D.current[LB];
   document.querySelectorAll('#lbSeg button').forEach(b => b.classList.toggle('active', b.dataset.lb === LB));
   document.getElementById('subtitle').innerHTML =
     `美元指數 × 美債殖利率曲線 → 流動性象限 · 散戶情緒 · 資料至 <b>${ymd(D.dates[D.dates.length - 1])}</b> · 更新於 ${new Date(D.generated_at).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
-  NAV.w = window.innerWidth < 600 ? 380 : 560;   // 手機用窄比例，字才不會縮太小
+  NAV.w = window.innerWidth < 600 ? 380 : 900;   // 整頁寬用寬比例；手機用窄比例，字才不會縮太小
   document.getElementById('app').innerHTML =
-    healthBlock() + fgBlock() + aaiiBlock() + signalBlock(cur) +
+    healthBlock() + sentimentRow() + aaiiChartBlock() + signalBlock(cur) +
     `<div class="grid-2">${regimeCard(cur)}${matrixCard(cur)}</div>` +
     chartsBlock() + stripBlock() +
     `<div class="row">${fitBlock(cur)}</div>`;
