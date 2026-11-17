@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>股票板塊熱度儀表板</title>
+<title>美股儀表板</title>
 <style>
   :root {
     --bg: #0e1116; --panel: #161b22; --panel-2: #1c2230; --border: #2a323d;
@@ -32,7 +32,7 @@
           box-shadow: var(--shadow); padding: 16px 18px; }
   .num { font-variant-numeric: tabular-nums; }
   .pos { color: var(--pos); } .neg { color: var(--neg); } .dim { color: var(--text-faint); }
-  h2 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: baseline; gap: 8px; }
+  h2 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: baseline; gap: 2px 8px; flex-wrap: wrap; }
   h2 small { font-size: 11.5px; color: var(--text-faint); font-weight: 400; }
 
   header.top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
@@ -135,6 +135,18 @@
   .fg-stat .v { font-size: 15px; font-weight: 700; }
   @media (max-width: 520px) { .fg { flex-direction: column; align-items: stretch; } .fg-gauge { margin: 0 auto; } }
 
+  /* AAII 散戶情緒 */
+  .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .aaii-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .aaii-band { font-size: 22px; font-weight: 800; }
+  .aaii-spread { font-size: 13px; color: var(--text-dim); }
+  .stackbar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; margin: 10px 0 8px; font-size: 11px; font-weight: 800; color: #fff; }
+  .stackbar span { display: flex; align-items: center; justify-content: center; min-width: 0; white-space: nowrap; overflow: hidden; }
+  .aaii-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 6px; }
+  .aaii-stats .delta .v { font-size: 16px; }
+  .baserate { background: var(--panel-2); border-radius: 9px; padding: 9px 11px; font-size: 12.5px; color: var(--text-dim); margin-top: 10px; line-height: 1.6; }
+  .baserate b { color: var(--text); }
+
   footer { color: var(--text-faint); font-size: 11.5px; margin-top: 22px; line-height: 1.8; }
   footer .warn { color: var(--q2); font-weight: 600; }
   code { font-size: 11px; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
@@ -144,7 +156,7 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <h1><span class="logo-dot"></span>股票板塊熱度儀表板</h1>
+    <h1><span class="logo-dot"></span>美股儀表板</h1>
     <div class="controls">
       <div class="seg" id="lbSeg">
         <button data-lb="20">1 個月</button>
@@ -153,7 +165,7 @@
       <button class="btn" id="refreshBtn">↻ 重新整理</button>
     </div>
   </header>
-  <div class="subtitle" id="subtitle">美元指數 × 美債殖利率曲線 → 流動性象限</div>
+  <div class="subtitle" id="subtitle">美元指數 × 美債殖利率曲線 → 流動性象限 · 散戶情緒</div>
 
   <div id="app"><div class="error">載入中…</div></div>
 
@@ -211,6 +223,9 @@ function lineChart(series, opt) {
     svg += `<line x1="${pL}" x2="${w - pR}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--neg)" stroke-width="1" opacity=".6"/>`;
     svg += `<text x="${w - pR - 2}" y="${(y(0) + 11).toFixed(1)}" text-anchor="end" font-size="9.5" fill="var(--neg)">倒掛區</text>`;
   }
+  (opt.refs || []).forEach(r => {
+    svg += `<line x1="${pL}" x2="${w - pR}" y1="${y(r.v).toFixed(1)}" y2="${y(r.v).toFixed(1)}" stroke="${r.color}" stroke-width="1" stroke-dasharray="5 4" opacity=".55"/>`;
+  });
   if (opt.markFrom != null && opt.markFrom >= 0) {
     svg += `<rect x="${x(opt.markFrom).toFixed(1)}" y="${pT}" width="${(x(n - 1) - x(opt.markFrom)).toFixed(1)}" height="${ih}" fill="var(--accent)" opacity=".07"/>`;
   }
@@ -218,9 +233,9 @@ function lineChart(series, opt) {
     const d = s.data.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
     svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linejoin="round"/>`;
   });
-  const dates = D.dates;
+  const dates = opt.dates || D.dates;
   [[0, 'start'], [Math.floor((n - 1) / 2), 'middle'], [n - 1, 'end']].forEach(([i, a]) => {
-    svg += `<text x="${x(i).toFixed(1)}" y="${h - 6}" text-anchor="${a}" font-size="10" fill="var(--text-faint)">${md(dates[i])}</text>`;
+    svg += `<text x="${x(i).toFixed(1)}" y="${h - 6}" text-anchor="${a}" font-size="10" fill="var(--text-faint)">${(opt.xfmt || md)(dates[i])}</text>`;
   });
   return `<svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${svg}</svg>`;
 }
@@ -242,6 +257,55 @@ function gauge(score) {
     <text x="${cx}" y="${cy - 26}" text-anchor="middle" font-size="36" font-weight="800" fill="${col}">${Math.round(score)}</text>
     <text x="16" y="146" font-size="11" fill="var(--text-faint)">0 恐慌</text>
     <text x="224" y="146" text-anchor="end" font-size="11" fill="var(--text-faint)">貪婪 100</text></svg>`;
+}
+
+/* ---------- AAII 散戶情緒 ---------- */
+const BAND_COL = { '極度悲觀': 'var(--neg)', '偏悲觀': 'var(--q2)', '中性': 'var(--text-dim)', '偏樂觀': 'var(--q4)', '極度樂觀': 'var(--q4)' };
+function aaiiBlock() {
+  const a = D.aaii;
+  if (!a) return '';
+  const chg = (v, p, inv) => {
+    const d = v - p; if (Math.abs(d) < 0.05) return '<span class="dim">持平</span>';
+    return `<span class="${inv == null ? '' : (d > 0) !== inv ? 'pos' : 'neg'}">${d > 0 ? '▲' : '▼'}${Math.abs(d).toFixed(1)}</span>`;
+  };
+  const rank = a.pct < 50
+    ? `只有 <b>${a.pct.toFixed(0)}%</b> 的週一樣悲觀或更悲觀`
+    : `只有 <b>${(100 - a.pct).toFixed(0)}%</b> 的週比現在更樂觀`;
+  const h = a.history;
+  const br = a.base_rate;
+  let brTxt = '';
+  if (br) {
+    const better = br.band.median - br.all.median, dpos = br.band.pos - br.all.pos;
+    const verdict = Math.abs(dpos) < 0.05
+      ? (Math.abs(better) < 0.01 ? '跟平常沒有明顯差別。' : `上漲機率跟平常差不多，差別主要在幅度（中位數${better > 0 ? '多' : '少'} ${Math.abs(better * 100).toFixed(1)} 個百分點）。`)
+      : `上漲機率${dpos > 0 ? '高' : '低'}於平常 ${Math.abs(dpos * 100).toFixed(0)} 個百分點。`;
+    brTxt = `<div class="baserate">📊 <b>歷史對照：</b>1987 年以來落在「${a.band}」區間的 <b>${br.band.n}</b> 週，S&P 500 之後 ${br.weeks} 週報酬中位數
+      <b class="${br.band.median >= 0 ? 'pos' : 'neg'}">${pct(br.band.median)}</b>、上漲機率 <b>${(br.band.pos * 100).toFixed(0)}%</b>；
+      全部週為 ${pct(br.all.median)}、${(br.all.pos * 100).toFixed(0)}%。${verdict}
+      <div class="dim" style="font-size:11px;margin-top:3px">相鄰週的前瞻期間大幅重疊，實際獨立樣本遠少於 ${br.band.n}；只能當背景，不是勝率保證。</div></div>`;
+  }
+  return `<div class="card">
+    <h2>散戶情緒 <small>AAII 每週調查：「未來 6 個月股市會漲、持平、還是跌？」· ${ymd(a.date)}</small></h2>
+    <div class="aaii-head">
+      <span class="aaii-band" style="color:${BAND_COL[a.band]}">${a.band}</span>
+      <span class="aaii-spread">看多−看空 <b class="num ${a.spread >= 0 ? 'pos' : 'neg'}">${sgn(a.spread, 1)}</b>（長期平均 ${sgn(a.avg.spread, 1)}）· 1987 年以來${rank}</span>
+    </div>
+    <div class="stackbar num">
+      <span style="flex:${a.bull};background:var(--pos)">看多 ${a.bull}%</span>
+      <span style="flex:${a.neutral};background:var(--text-faint)">中立 ${a.neutral}%</span>
+      <span style="flex:${a.bear};background:var(--neg)">看空 ${a.bear}%</span>
+    </div>
+    <div class="aaii-stats num">
+      <div class="delta"><div class="l">看多</div><div class="v pos">${a.bull}%</div><div class="s">長期 ${a.avg.bull}% · 週 ${chg(a.bull, a.prev.bull, false)}</div></div>
+      <div class="delta"><div class="l">中立</div><div class="v">${a.neutral}%</div><div class="s">長期 ${a.avg.neutral}% · 週 ${chg(a.neutral, a.prev.neutral, null)}</div></div>
+      <div class="delta"><div class="l">看空</div><div class="v neg">${a.bear}%</div><div class="s">長期 ${a.avg.bear}% · 週 ${chg(a.bear, a.prev.bear, true)}</div></div>
+    </div>
+    <div class="note" style="margin:2px 0 4px">${a.band_desc}${a.streak >= 2 ? ` 已連續 <b>${a.streak}</b> 週${a.spread < 0 ? '看空多於看多' : '看多多於看空'}。` : ''}</div>
+    ${lineChart([{ data: h.bull, color: 'var(--pos)' }, { data: h.bear, color: 'var(--neg)' }],
+      { fmt: v => Math.round(v) + '%', dates: h.dates, xfmt: s => s.slice(0, 7).replace('-', '/'), refs: [{ v: a.avg.bull, color: 'var(--pos)' }, { v: a.avg.bear, color: 'var(--neg)' }] })}
+    <div class="legend"><span><i style="background:var(--pos)"></i>看多</span><span><i style="background:var(--neg)"></i>看空</span><span>虛線＝1987 年以來平均 · 近兩年每週</span></div>
+    ${brTxt}
+  </div>`;
 }
 
 /* ---------- 各區塊 ---------- */
@@ -405,14 +469,14 @@ function render() {
   const cur = D.current[LB];
   document.querySelectorAll('#lbSeg button').forEach(b => b.classList.toggle('active', b.dataset.lb === LB));
   document.getElementById('subtitle').innerHTML =
-    `美元指數 × 美債殖利率曲線 → 流動性象限 · 資料至 <b>${ymd(D.dates[D.dates.length - 1])}</b> · 更新於 ${new Date(D.generated_at).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+    `美元指數 × 美債殖利率曲線 → 流動性象限 · 散戶情緒 · 資料至 <b>${ymd(D.dates[D.dates.length - 1])}</b> · 更新於 ${new Date(D.generated_at).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
   document.getElementById('app').innerHTML =
     signalBlock(cur) +
     `<div class="grid-2">${regimeCard(cur)}${matrixCard(cur)}</div>` +
     chartsBlock() + stripBlock() +
-    `<div class="grid-2">${fitBlock(cur)}${fgBlock()}</div>`;
+    `<div class="grid-2">${fitBlock(cur)}<div class="stack">${fgBlock()}${aaiiBlock()}</div></div>`;
   document.getElementById('provenance').innerHTML =
-    `資料來源：2Y／10Y＝${D.sources.yields}；DXY＝${D.sources.dxy}；驗證資產＝${D.sources.assets}；情緒＝${D.sources.sentiment}。` +
+    `資料來源：2Y／10Y＝${D.sources.yields}；DXY＝${D.sources.dxy}；驗證資產＝${D.sources.assets}；情緒＝${D.sources.sentiment}、${D.sources.aaii || 'AAII'}（S&P 500＝${D.sources.spx || 'Yahoo'}）。` +
     `象限由 <code>regime.py</code> 計算（參數版本 <code>${D.param_version}</code>，死區：1 個月 DXY ±${D.params.LOOKBACKS['20'].dxy_pct}%／利差 ±${D.params.LOOKBACKS['20'].spread_bp}bp；3 個月 ±${D.params.LOOKBACKS['60'].dxy_pct}%／±${D.params.LOOKBACKS['60'].spread_bp}bp）。`;
 }
 

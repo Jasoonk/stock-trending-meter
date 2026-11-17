@@ -5,6 +5,8 @@
   美國財政部官方每日殖利率曲線 → 2Y、10Y（同一來源，避免口徑差異污染利差）
   Yahoo chart API             → DXY（DX-Y.NYB）與驗證用代表資產
   CNN                         → 恐慌貪婪指數
+  AAII                        → 每週散戶看多／看空調查（歷史由 backfill_aaii.py 灌入）
+  Yahoo ^GSPC                 → 每個 AAII 週的 S&P 500 收盤（算各情緒區間之後的報酬）
         → macro.db（每日序列 + 象限歷史）
         → data.json（前端只負責顯示）
 
@@ -29,6 +31,7 @@ import urllib.parse
 from pathlib import Path
 
 import regime as rg
+import aaii
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -47,6 +50,8 @@ TREASURY_URL = ("https://home.treasury.gov/resource-center/data-chart-center/"
                 "interest-rates/daily-treasury-rates.csv/{y}/all?"
                 "type=daily_treasury_yield_curve&field_tdr_date_value={y}&page&_format=csv")
 YF_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=2y&interval=1d"
+YF_LONG_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?period1={p1}&period2={p2}&interval=1d"
+SPX = "^GSPC"
 FG_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 FG_HEADERS = {
     "User-Agent": UA, "Accept": "application/json, text/plain, */*",
@@ -89,11 +94,17 @@ def fetch_treasury(years):
     return out
 
 
-def fetch_yahoo(sym):
-    """回傳 {date_iso: close}；丟棄 None 與週末 K 棒，日期取 UTC 日期。"""
+def fetch_yahoo(sym, since=None):
+    """回傳 {date_iso: close}；丟棄 None 與週末 K 棒，日期取 UTC 日期。
+    since=datetime.date 時改抓從該日起的完整日線（給 S&P 500 長歷史用）。"""
+    if since:
+        p1 = int(datetime.datetime(since.year, since.month, since.day, tzinfo=datetime.timezone.utc).timestamp())
+        url = YF_LONG_URL.format(sym=urllib.parse.quote(sym), p1=p1,
+                                 p2=int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
+    else:
+        url = YF_URL.format(sym=urllib.parse.quote(sym))
     try:
-        d = json.loads(http_get(YF_URL.format(sym=urllib.parse.quote(sym)),
-                                {"User-Agent": UA, "Accept": "application/json"}))
+        d = json.loads(http_get(url, {"User-Agent": UA, "Accept": "application/json"}))
         r = d["chart"]["result"][0]
     except Exception as e:
         print(f"  ! Yahoo {sym} 抓取失敗：{e}")
@@ -128,6 +139,18 @@ def fetch_fear_greed():
         return None
 
 
+def fetch_aaii(today):
+    try:
+        page = http_get(aaii.SENT_URL, {"User-Agent": UA, "Accept": "text/html"}).decode("utf-8", "replace")
+        rows = aaii.parse_sent_results(page, today)
+        if not rows:
+            print("  ! AAII 網頁格式改變，解析不到表格（略過，保留資料庫既有資料）")
+        return rows
+    except Exception as e:
+        print(f"  ! AAII 抓取失敗（略過，保留資料庫既有資料）：{e}")
+        return []
+
+
 # --------------------------------------------------------------------------- #
 # 資料庫
 # --------------------------------------------------------------------------- #
@@ -150,6 +173,12 @@ def init_db(conn):
         CREATE TABLE IF NOT EXISTS market_indicators (
             indicator TEXT NOT NULL, timestamp TEXT NOT NULL, score REAL, rating TEXT,
             UNIQUE(indicator, timestamp)
+        );
+        CREATE TABLE IF NOT EXISTS aaii_weekly (
+            date TEXT PRIMARY KEY,          -- 該週週四
+            bullish REAL, neutral REAL, bearish REAL,   -- 比例 0–1
+            source TEXT,                    -- xls（官方歷史檔）或 web（每週網頁）
+            spx_close REAL                  -- 該週四（或之前最近交易日）S&P 500 收盤
         );
         CREATE TABLE IF NOT EXISTS param_versions (
             version TEXT PRIMARY KEY, config_json TEXT NOT NULL, first_used TEXT NOT NULL
@@ -194,6 +223,9 @@ def main():
     fg = fetch_fear_greed()
     if fg:
         print(f"  · CNN 恐慌貪婪指數：{fg['score']}（{fg['rating']}）")
+    aaii_rows = fetch_aaii(today)
+    if aaii_rows:
+        print(f"  · AAII 網頁：{len(aaii_rows)} 週（最新 {aaii_rows[0][0]}）")
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -206,6 +238,17 @@ def main():
         for sym, ser in assets.items():
             conn.executemany("INSERT OR REPLACE INTO asset_daily (symbol,date,close) VALUES (?,?,?)",
                              [(sym, d, c) for d, c in ser.items()])
+        # AAII：已有的週（官方 xls 精度較高）不覆蓋，只補新週
+        conn.executemany("INSERT OR IGNORE INTO aaii_weekly (date,bullish,neutral,bearish,source) "
+                         "VALUES (?,?,?,?,'web')", aaii_rows)
+        # S&P 500：只存每個 AAII 週的收盤。近兩年每次重算（週四早上抓到新週時當天還沒收盤，
+        # 先用前一日補，隔天自動更正）；更早的由 backfill_aaii.py 填好。
+        spx = fetch_yahoo(SPX)
+        if spx:
+            f, first = ffill_lookup(spx), min(spx)
+            conn.executemany("UPDATE aaii_weekly SET spx_close=? WHERE date=?",
+                             [(f(d), d) for (d,) in conn.execute(
+                                 "SELECT date FROM aaii_weekly WHERE date>=?", (first,)).fetchall()])
         if fg:
             conn.execute("INSERT OR REPLACE INTO market_indicators (indicator,timestamp,score,rating) "
                          "VALUES (?,?,?,?)", ("cnn_fear_greed", today.isoformat(), fg["score"], fg["rating"]))
@@ -226,6 +269,12 @@ def main():
         ver = rg.param_version()
         conn.execute("INSERT OR IGNORE INTO param_versions (version,config_json,first_used) VALUES (?,?,?)",
                      (ver, json.dumps({"PARAMS": rg.PARAMS}, ensure_ascii=False), today.isoformat()))
+
+        aaii_hist = conn.execute("SELECT date,bullish,neutral,bearish FROM aaii_weekly "
+                                 "ORDER BY date").fetchall()
+        spx_wk = dict(conn.execute("SELECT date,spx_close FROM aaii_weekly "
+                                   "WHERE spx_close IS NOT NULL").fetchall())
+        sentiment = aaii.summarize(aaii_hist, ffill_lookup(spx_wk) if spx_wk else None)
 
         dates = [r[0] for r in rows]
         dxys = [r[1] for r in rows]
@@ -298,7 +347,8 @@ def main():
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "param_version": ver, "params": rg.PARAMS,
         "sources": {"yields": "U.S. Treasury Daily Par Yield Curve", "dxy": "Yahoo DX-Y.NYB",
-                    "assets": "Yahoo", "sentiment": "CNN Fear & Greed"},
+                    "assets": "Yahoo", "sentiment": "CNN Fear & Greed",
+                    "aaii": "AAII Investor Sentiment Survey", "spx": "Yahoo ^GSPC"},
         "dates": dates[start:],
         "dxy": [round(v, 3) for v in dxys[start:]],
         "y2": y2s[start:], "y10": y10s[start:],
@@ -307,6 +357,7 @@ def main():
         "quadrants": rg.QUADRANTS,
         "assets": [{"symbol": s, "label": l} for s, l in rg.ASSETS],
         "market": {"fear_greed": fg} if fg else {},
+        "aaii": sentiment,
     }
     OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
@@ -318,6 +369,10 @@ def main():
               f" | DXY {c['d_dxy_pct']:+.2f}% 2Y {c['d2_bp']:+.0f}bp 10Y {c['d10_bp']:+.0f}bp"
               f" 利差 {c['d_spread_bp']:+.0f}bp | 已 {c['spell_days']} 天"
               + (f" | 劇本吻合 {fit['hits']}/{fit['total']}" if fit else ""))
+    if sentiment:
+        s = sentiment
+        print(f"  · AAII {s['date']}：看多 {s['bull']}% 中立 {s['neutral']}% 看空 {s['bear']}%"
+              f" | 利差 {s['spread']:+.1f}（第 {s['pct']:.0f} 百分位，{s['band']}）")
     print(f"完成：{len(dates)} 個交易日 → data.json（顯示近 {len(dates) - start} 日，參數版本 {ver}）")
     return 0
 

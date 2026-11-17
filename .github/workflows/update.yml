@@ -1,4 +1,4 @@
-name: 每日更新流動性象限
+name: 每日更新美股儀表板
 
 on:
   schedule:
@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 抓取 DXY／美債殖利率並計算象限
+      - name: 抓取 DXY／美債殖利率／AAII 並計算象限
         run: python fetch.py
 
       - name: Commit 更新後的資料
@@ -36,6 +36,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "無變更，略過 commit。"
           else
-            git commit -m "chore: 每日流動性象限 $(date -u +%F)"
+            git commit -m "chore: 每日更新 $(date -u +%F)"
             git push
           fi
