@@ -4,5 +4,5 @@ __pycache__/
 .venv/
 venv/
 
-# 注意：attention.db 與 data.json 「不」忽略 —
-# 它們是歷史快照的儲存本體，需隨每日 GitHub Actions commit 累積。
+# 注意：macro.db 與 data.json 「不」忽略 —
+# 它們由每日 GitHub Actions 更新並 commit，Pages 直接讀 data.json。

@@ -5,13 +5,13 @@ rem Resolve this file's folder, strip trailing backslash (avoids "path\" escapin
 set "HERE=%~dp0"
 if "%HERE:~-1%"=="\" set "HERE=%HERE:~0,-1%"
 cd /d "%HERE%"
-title Attention Lifecycle Dashboard
+title Macro Liquidity Dashboard
 
 echo ============================================
-echo    Attention Lifecycle Dashboard
+echo    Macro Liquidity Dashboard
 echo ============================================
 echo.
-echo [1/2] Updating data from ApeWisdom...
+echo [1/2] Updating DXY / Treasury yields...
 echo.
 python fetch.py
 if errorlevel 1 echo [!] Update failed (no internet, or Python not on PATH). Will try existing data.

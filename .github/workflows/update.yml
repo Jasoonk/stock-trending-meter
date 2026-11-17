@@ -1,4 +1,4 @@
-name: 每日更新注意力快照
+name: 每日更新流動性象限
 
 on:
   schedule:
@@ -7,10 +7,10 @@ on:
   workflow_dispatch: {}   # 允許手動觸發
 
 permissions:
-  contents: write         # 讓 workflow 能 commit 回 data.json / attention.db
+  contents: write         # 讓 workflow 能 commit 回 data.json / macro.db
 
 concurrency:
-  group: attention-update
+  group: macro-update
   cancel-in-progress: false
 
 jobs:
@@ -25,17 +25,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 抓取 ApeWisdom 並更新快照
+      - name: 抓取 DXY／美債殖利率並計算象限
         run: python fetch.py
 
       - name: Commit 更新後的資料
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data.json attention.db
+          git add data.json macro.db
           if git diff --staged --quiet; then
             echo "無變更，略過 commit。"
           else
-            git commit -m "chore: 每日注意力快照 $(date -u +%F)"
+            git commit -m "chore: 每日流動性象限 $(date -u +%F)"
             git push
           fi
