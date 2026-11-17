@@ -137,6 +137,9 @@
 
   /* AAII 散戶情緒 */
   .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .row { margin-bottom: 16px; }
+  .aaii-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 22px; align-items: start; }
+  @media (max-width: 860px) { .aaii-grid { grid-template-columns: 1fr; } }
   .aaii-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .aaii-band { font-size: 22px; font-weight: 800; }
   .aaii-spread { font-size: 13px; color: var(--text-dim); }
@@ -232,7 +235,7 @@ async function load() {
 const CH = {};          // 圖表 id → 座標資訊（給 hover 用）
 let chartSeq = 0;
 function lineChart(series, opt) {
-  const w = 380, h = 170, pL = 38, pR = 8, pT = 10, pB = 22;
+  const w = opt.w || 380, h = opt.h || 170, pL = 38, pR = 8, pT = 10, pB = 22;
   const iw = w - pL - pR, ih = h - pT - pB;
   const all = series.flatMap(s => s.data).concat(opt.zero ? [0] : []);
   let lo = Math.min(...all), hi = Math.max(...all);
@@ -346,8 +349,9 @@ function aaiiBlock() {
       全部週為 ${pct(br.all.median)}、${(br.all.pos * 100).toFixed(0)}%。${verdict}
       <div class="dim" style="font-size:11px;margin-top:3px">相鄰週的前瞻期間大幅重疊，實際獨立樣本遠少於 ${br.band.n}；只能當背景，不是勝率保證。</div></div>`;
   }
-  return `<div class="card">
+  return `<div class="card row">
     <h2>散戶情緒 <small>AAII 每週調查：「未來 6 個月股市會漲、持平、還是跌？」· ${ymd(a.date)}</small></h2>
+    <div class="aaii-grid"><div>
     <div class="aaii-head">
       <span class="aaii-band" style="color:${BAND_COL[a.band]}">${a.band}</span>
       <span class="aaii-spread">看多−看空 <b class="num ${a.spread >= 0 ? 'pos' : 'neg'}">${sgn(a.spread, 1)}</b>（長期平均 ${sgn(a.avg.spread, 1)}）· 1987 年以來${rank}</span>
@@ -363,7 +367,9 @@ function aaiiBlock() {
       <div class="delta"><div class="l">看空</div><div class="v neg">${a.bear}%</div><div class="s">長期 ${a.avg.bear}% · 週 ${chg(a.bear, a.prev.bear, true)}</div></div>
     </div>
     <div class="note" style="margin:2px 0 4px">${a.band_desc}${a.streak >= 2 ? ` 已連續 <b>${a.streak}</b> 週${a.spread < 0 ? '看空多於看多' : '看多多於看空'}。` : ''}</div>
-    <div class="zoom-bar">
+    ${brTxt}
+    </div><div>
+    <div class="zoom-bar" style="margin-top:0">
       <div class="seg sm" id="aaiiRange">${AAII_PRESETS.map(([k, l]) => `<button data-k="${k}">${l}</button>`).join('')}</div>
       <span class="zoom-lbl num" id="aaiiRangeLbl"></span>
     </div>
@@ -371,13 +377,13 @@ function aaiiBlock() {
     <div id="aaiiNav">${aaiiNavSvg()}</div>
     <div class="legend"><span><i style="background:var(--pos)"></i>看多</span><span><i style="background:var(--neg)"></i>看空</span><span>虛線＝1987 年以來平均</span>
       <span>下方時間線：拖曳選範圍 · 拖曳框框平移 · 拉兩側調寬窄 · 滾輪縮放</span></div>
-    ${brTxt}
+    </div></div>
   </div>`;
 }
 
 /* ---------- AAII 可縮放時間軸 ---------- */
 const AAII_PRESETS = [[26, '6 個月'], [52, '1 年'], [104, '2 年'], [260, '5 年'], [0, '全部']];
-const NAV = { w: 380, h: 44, pL: 6, pR: 6, pT: 4, pB: 14 };
+const NAV = { w: 560, h: 50, pL: 6, pR: 6, pT: 4, pB: 14 };
 const MIN_WIN = 8;                      // 最少顯示 8 週
 let AV = null;                          // [起, 迄] 週索引（含）；null＝預設近兩年
 let navDrag = null;
@@ -431,7 +437,7 @@ function drawAaii() {
   const span = e - s + 1;
   el.innerHTML = lineChart(
     [{ data: sl(h.bull), color: 'var(--pos)', name: '看多' }, { data: sl(h.bear), color: 'var(--neg)', name: '看空' }],
-    { id: 'aaii', fmt: v => Math.round(v) + '%', vfmt: v => v.toFixed(1) + '%', dates: sl(h.dates),
+    { id: 'aaii', w: NAV.w, h: NAV.w > 400 ? 230 : 190, fmt: v => Math.round(v) + '%', vfmt: v => v.toFixed(1) + '%', dates: sl(h.dates),
       xfmt: span > 520 ? (d => d.slice(0, 4)) : (d => d.slice(0, 7).replace('-', '/')),
       refs: [{ v: a.avg.bull, color: 'var(--pos)' }, { v: a.avg.bear, color: 'var(--neg)' }],
       extra: i => { const v = h.spread[s + i]; return `<div>看多−看空 <b class="${v >= 0 ? 'pos' : 'neg'}">${sgn(v, 1)}</b></div>`; } });
@@ -650,7 +656,7 @@ function fgBlock() {
   if (!fg) return '';
   const st = (l, v) => v == null ? '' : `<div class="fg-stat"><div class="l">${l}</div><div class="v num">${Math.round(v)}
     <small class="${fg.score - v >= 0 ? 'pos' : 'neg'}">${fg.score - v >= 0 ? '▲' : '▼'}${Math.abs(fg.score - v).toFixed(0)}</small></div></div>`;
-  return `<div class="card">
+  return `<div class="card row">
     <h2>市場情緒 <small>CNN 恐慌貪婪指數（與流動性象限互相參照）</small></h2>
     <div class="fg"><div class="fg-gauge">${gauge(fg.score)}</div>
       <div class="fg-body">
@@ -665,11 +671,12 @@ function render() {
   document.querySelectorAll('#lbSeg button').forEach(b => b.classList.toggle('active', b.dataset.lb === LB));
   document.getElementById('subtitle').innerHTML =
     `美元指數 × 美債殖利率曲線 → 流動性象限 · 散戶情緒 · 資料至 <b>${ymd(D.dates[D.dates.length - 1])}</b> · 更新於 ${new Date(D.generated_at).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+  NAV.w = window.innerWidth < 600 ? 380 : 560;   // 手機用窄比例，字才不會縮太小
   document.getElementById('app').innerHTML =
-    healthBlock() + signalBlock(cur) +
+    healthBlock() + fgBlock() + aaiiBlock() + signalBlock(cur) +
     `<div class="grid-2">${regimeCard(cur)}${matrixCard(cur)}</div>` +
     chartsBlock() + stripBlock() +
-    `<div class="grid-2">${fitBlock(cur)}<div class="stack">${fgBlock()}${aaiiBlock()}</div></div>`;
+    `<div class="row">${fitBlock(cur)}</div>`;
   drawAaii();
   document.getElementById('provenance').innerHTML =
     (D.health ? `<div>資料來源狀態：${D.health.map(h =>
@@ -683,6 +690,14 @@ document.getElementById('lbSeg').addEventListener('click', e => {
   LB = b.dataset.lb; localStorageSet('lb', LB); render();
 });
 document.getElementById('refreshBtn').addEventListener('click', load);
+let resizeT = null, lastNarrow = window.innerWidth < 600;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    const narrow = window.innerWidth < 600;
+    if (D && narrow !== lastNarrow) { lastNarrow = narrow; render(); }
+  }, 150);
+});
 document.addEventListener('pointermove', e => { navMove(e); if (!navDrag) chartHover(e); });
 document.addEventListener('pointerdown', e => { chartHover(e); navDown(e); });
 document.addEventListener('pointerup', navUp);
