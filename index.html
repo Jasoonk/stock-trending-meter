@@ -8,7 +8,7 @@
   :root {
     --bg: #0e1116; --panel: #161b22; --panel-2: #1c2230; --border: #2a323d;
     --text: #e6edf3; --text-dim: #9aa7b4; --text-faint: #6b7684;
-    --accent: #58a6ff; --pos: #3fb950; --neg: #f85149;
+    --accent: #58a6ff; --pos: #3fb950; --neg: #f85149; --warn: #d29922;
     --q1: #f85149; --q2: #f0883e; --q3: #3fb950; --q4: #58a6ff;
     --shadow: 0 8px 30px rgba(0,0,0,.35); --radius: 12px;
   }
@@ -16,7 +16,7 @@
     :root {
       --bg: #f6f8fa; --panel: #ffffff; --panel-2: #f1f4f8; --border: #d6dee6;
       --text: #1f2933; --text-dim: #57636f; --text-faint: #8a949e;
-      --q3: #1f883d; --pos: #1f883d; --neg: #cf222e; --q1: #cf222e; --q2: #bc4c00; --q4: #0969da;
+      --q3: #1f883d; --pos: #1f883d; --warn: #9a6700; --neg: #cf222e; --q1: #cf222e; --q2: #bc4c00; --q4: #0969da;
       --shadow: 0 6px 24px rgba(30,50,80,.10);
     }
   }
@@ -147,6 +147,32 @@
   .baserate { background: var(--panel-2); border-radius: 9px; padding: 9px 11px; font-size: 12.5px; color: var(--text-dim); margin-top: 10px; line-height: 1.6; }
   .baserate b { color: var(--text); }
 
+  /* 圖表 hover */
+  .lc { position: relative; }
+  .lc svg { display: block; touch-action: pan-y; }
+  .lc-tip { position: absolute; top: 4px; pointer-events: none; display: none; z-index: 5;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
+            padding: 6px 9px; font-size: 11.5px; line-height: 1.55; white-space: nowrap; color: var(--text-dim); }
+  .lc-tip .d { font-weight: 800; color: var(--text); margin-bottom: 1px; }
+  .lc-tip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .lc-tip b { color: var(--text); }
+
+  /* AAII 縮放 */
+  .zoom-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 2px; }
+  .seg.sm button { padding: 3px 9px; font-size: 11.5px; }
+  .zoom-lbl { font-size: 11.5px; color: var(--text-faint); }
+  #aaiiNav { margin-top: 4px; }
+  #aaiiNav svg { display: block; touch-action: none; cursor: crosshair; user-select: none; }
+  #aaiiNav .win { cursor: grab; }
+  #aaiiNav .handle { cursor: ew-resize; }
+
+  /* 資料來源異常 */
+  .health { border-left: 5px solid var(--warn); margin-bottom: 16px; font-size: 13px; }
+  .health .ht { font-weight: 800; color: var(--warn); }
+  .health ul { margin: 4px 0 0; padding-left: 20px; color: var(--text-dim); }
+  .health .hn { font-size: 11.5px; color: var(--text-faint); margin-top: 4px; }
+  .src-ok { color: var(--pos); } .src-bad { color: var(--warn); font-weight: 700; }
+
   footer { color: var(--text-faint); font-size: 11.5px; margin-top: 22px; line-height: 1.8; }
   footer .warn { color: var(--q2); font-weight: 600; }
   code { font-size: 11px; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
@@ -202,7 +228,9 @@ async function load() {
   }
 }
 
-/* ---------- 小型 SVG 折線圖（含 Y 軸與 X 軸刻度） ---------- */
+/* ---------- 小型 SVG 折線圖（含 Y 軸與 X 軸刻度、滑鼠 hover 顯示日期與數值） ---------- */
+const CH = {};          // 圖表 id → 座標資訊（給 hover 用）
+let chartSeq = 0;
 function lineChart(series, opt) {
   const w = 380, h = 170, pL = 38, pR = 8, pT = 10, pB = 22;
   const iw = w - pL - pR, ih = h - pT - pB;
@@ -237,7 +265,41 @@ function lineChart(series, opt) {
   [[0, 'start'], [Math.floor((n - 1) / 2), 'middle'], [n - 1, 'end']].forEach(([i, a]) => {
     svg += `<text x="${x(i).toFixed(1)}" y="${h - 6}" text-anchor="${a}" font-size="10" fill="var(--text-faint)">${(opt.xfmt || md)(dates[i])}</text>`;
   });
-  return `<svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${svg}</svg>`;
+  svg += `<line class="xh" x1="0" x2="0" y1="${pT}" y2="${pT + ih}" stroke="var(--text-faint)" stroke-dasharray="3 3" visibility="hidden"/>`;
+  series.forEach(s => { svg += `<circle class="xd" r="3.5" fill="${s.color}" stroke="var(--panel)" stroke-width="1.5" visibility="hidden"/>`; });
+  const id = opt.id || 'c' + (++chartSeq);
+  CH[id] = { w, n, pL, iw, x, y, dates, series, vfmt: opt.vfmt || opt.fmt, extra: opt.extra };
+  return `<div class="lc" data-id="${id}"><svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${svg}</svg><div class="lc-tip"></div></div>`;
+}
+
+function hideHover(wrap) {
+  wrap.classList.remove('on');
+  wrap.querySelectorAll('.xh,.xd').forEach(el => el.setAttribute('visibility', 'hidden'));
+  wrap.querySelector('.lc-tip').style.display = 'none';
+}
+function chartHover(e) {
+  const wrap = e.target.closest ? e.target.closest('.lc') : null;
+  document.querySelectorAll('.lc.on').forEach(el => { if (el !== wrap) hideHover(el); });
+  if (!wrap) return;
+  const m = CH[wrap.dataset.id]; if (!m) return;
+  const r = wrap.querySelector('svg').getBoundingClientRect();
+  const sx = (e.clientX - r.left) / r.width * m.w;
+  const i = Math.max(0, Math.min(m.n - 1, Math.round((sx - m.pL) / m.iw * (m.n - 1))));
+  const X = m.x(i);
+  wrap.classList.add('on');
+  const xh = wrap.querySelector('.xh');
+  xh.setAttribute('x1', X); xh.setAttribute('x2', X); xh.setAttribute('visibility', 'visible');
+  wrap.querySelectorAll('.xd').forEach((c, k) => {
+    c.setAttribute('cx', X); c.setAttribute('cy', m.y(m.series[k].data[i])); c.setAttribute('visibility', 'visible');
+  });
+  const tip = wrap.querySelector('.lc-tip');
+  tip.innerHTML = `<div class="d">${ymd(m.dates[i])}</div>` +
+    m.series.map(s => `<div><i style="background:${s.color}"></i>${s.name || ''} <b>${m.vfmt(s.data[i])}</b></div>`).join('') +
+    (m.extra ? m.extra(i) : '');
+  tip.style.display = 'block';
+  const px = X / m.w * r.width;
+  const left = px > r.width / 2 ? px - tip.offsetWidth - 12 : px + 12;
+  tip.style.left = Math.max(0, left) + 'px';
 }
 
 /* ---------- 恐慌貪婪儀表 ---------- */
@@ -301,10 +363,143 @@ function aaiiBlock() {
       <div class="delta"><div class="l">看空</div><div class="v neg">${a.bear}%</div><div class="s">長期 ${a.avg.bear}% · 週 ${chg(a.bear, a.prev.bear, true)}</div></div>
     </div>
     <div class="note" style="margin:2px 0 4px">${a.band_desc}${a.streak >= 2 ? ` 已連續 <b>${a.streak}</b> 週${a.spread < 0 ? '看空多於看多' : '看多多於看空'}。` : ''}</div>
-    ${lineChart([{ data: h.bull, color: 'var(--pos)' }, { data: h.bear, color: 'var(--neg)' }],
-      { fmt: v => Math.round(v) + '%', dates: h.dates, xfmt: s => s.slice(0, 7).replace('-', '/'), refs: [{ v: a.avg.bull, color: 'var(--pos)' }, { v: a.avg.bear, color: 'var(--neg)' }] })}
-    <div class="legend"><span><i style="background:var(--pos)"></i>看多</span><span><i style="background:var(--neg)"></i>看空</span><span>虛線＝1987 年以來平均 · 近兩年每週</span></div>
+    <div class="zoom-bar">
+      <div class="seg sm" id="aaiiRange">${AAII_PRESETS.map(([k, l]) => `<button data-k="${k}">${l}</button>`).join('')}</div>
+      <span class="zoom-lbl num" id="aaiiRangeLbl"></span>
+    </div>
+    <div id="aaiiChart"></div>
+    <div id="aaiiNav">${aaiiNavSvg()}</div>
+    <div class="legend"><span><i style="background:var(--pos)"></i>看多</span><span><i style="background:var(--neg)"></i>看空</span><span>虛線＝1987 年以來平均</span>
+      <span>下方時間線：拖曳選範圍 · 拖曳框框平移 · 拉兩側調寬窄 · 滾輪縮放</span></div>
     ${brTxt}
+  </div>`;
+}
+
+/* ---------- AAII 可縮放時間軸 ---------- */
+const AAII_PRESETS = [[26, '6 個月'], [52, '1 年'], [104, '2 年'], [260, '5 年'], [0, '全部']];
+const NAV = { w: 380, h: 44, pL: 6, pR: 6, pT: 4, pB: 14 };
+const MIN_WIN = 8;                      // 最少顯示 8 週
+let AV = null;                          // [起, 迄] 週索引（含）；null＝預設近兩年
+let navDrag = null;
+
+function aaiiView() {
+  const N = D.aaii.history.dates.length;
+  if (!AV) AV = [Math.max(0, N - 104), N - 1];
+  return AV;
+}
+function setAaiiView(a, b) {
+  const N = D.aaii.history.dates.length;
+  const w = Math.round(Math.max(MIN_WIN - 1, Math.min(N - 1, b - a)));
+  a = Math.round(a); b = a + w;
+  if (a < 0) { a = 0; b = w; }
+  if (b > N - 1) { b = N - 1; a = b - w; }
+  AV = [a, b];
+  drawAaii();
+}
+const navX = (i, N) => NAV.pL + (i / (N - 1)) * (NAV.w - NAV.pL - NAV.pR);
+function navIdx(e, svg, N) {
+  const r = svg.getBoundingClientRect();
+  const sx = (e.clientX - r.left) / r.width * NAV.w;
+  return Math.max(0, Math.min(N - 1, (sx - NAV.pL) / (NAV.w - NAV.pL - NAV.pR) * (N - 1)));
+}
+function aaiiNavSvg() {
+  const h = D.aaii.history, N = h.dates.length, sp = h.spread;
+  const lo = Math.min(...sp), hi = Math.max(...sp), ih = NAV.h - NAV.pT - NAV.pB;
+  const y = v => NAV.pT + ih - (v - lo) / (hi - lo) * ih;
+  const path = sp.map((v, i) => (i ? 'L' : 'M') + navX(i, N).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+  let svg = `<rect x="${NAV.pL}" y="${NAV.pT}" width="${NAV.w - NAV.pL - NAV.pR}" height="${ih}" fill="var(--panel-2)" rx="3"/>`;
+  svg += `<line x1="${NAV.pL}" x2="${NAV.w - NAV.pR}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--border)"/>`;
+  svg += `<path d="${path}" fill="none" stroke="var(--text-faint)" stroke-width="0.8"/>`;
+  let lastY = null;
+  h.dates.forEach((d, i) => {
+    const yr = +d.slice(0, 4);
+    if (yr !== lastY && yr % 5 === 0) {
+      svg += `<text x="${navX(i, N).toFixed(1)}" y="${NAV.h - 2}" text-anchor="middle" font-size="9" fill="var(--text-faint)">${yr}</text>`;
+    }
+    lastY = yr;
+  });
+  svg += `<rect class="win" y="${NAV.pT}" height="${ih}" fill="var(--accent)" fill-opacity=".18" stroke="var(--accent)" stroke-width="1.2" rx="2"/>`;
+  svg += `<rect class="handle hl" y="${NAV.pT}" width="6" height="${ih}" fill="var(--accent)" rx="2"/>`;
+  svg += `<rect class="handle hr" y="${NAV.pT}" width="6" height="${ih}" fill="var(--accent)" rx="2"/>`;
+  return `<svg viewBox="0 0 ${NAV.w} ${NAV.h}" width="100%">${svg}</svg>`;
+}
+function drawAaii() {
+  const el = document.getElementById('aaiiChart');
+  if (!el) return;
+  const a = D.aaii, h = a.history, N = h.dates.length, [s, e] = aaiiView();
+  const sl = arr => arr.slice(s, e + 1);
+  const span = e - s + 1;
+  el.innerHTML = lineChart(
+    [{ data: sl(h.bull), color: 'var(--pos)', name: '看多' }, { data: sl(h.bear), color: 'var(--neg)', name: '看空' }],
+    { id: 'aaii', fmt: v => Math.round(v) + '%', vfmt: v => v.toFixed(1) + '%', dates: sl(h.dates),
+      xfmt: span > 520 ? (d => d.slice(0, 4)) : (d => d.slice(0, 7).replace('-', '/')),
+      refs: [{ v: a.avg.bull, color: 'var(--pos)' }, { v: a.avg.bear, color: 'var(--neg)' }],
+      extra: i => { const v = h.spread[s + i]; return `<div>看多−看空 <b class="${v >= 0 ? 'pos' : 'neg'}">${sgn(v, 1)}</b></div>`; } });
+  const svg = document.querySelector('#aaiiNav svg');
+  const x0 = navX(s, N), x1 = navX(e, N);
+  svg.querySelector('.win').setAttribute('x', x0.toFixed(1));
+  svg.querySelector('.win').setAttribute('width', Math.max(1, x1 - x0).toFixed(1));
+  svg.querySelector('.hl').setAttribute('x', (x0 - 3).toFixed(1));
+  svg.querySelector('.hr').setAttribute('x', (x1 - 3).toFixed(1));
+  document.getElementById('aaiiRangeLbl').textContent =
+    `${ymd(h.dates[s]).slice(0, 7)} – ${ymd(h.dates[e]).slice(0, 7)}（${span} 週）`;
+  document.querySelectorAll('#aaiiRange button').forEach(b => {
+    const k = +b.dataset.k;
+    b.classList.toggle('active', e === N - 1 && (k === 0 ? s === 0 : span === Math.min(k, N)));
+  });
+}
+function navDown(e) {
+  const svg = e.target.closest && e.target.closest('#aaiiNav svg');
+  if (!svg || !D || !D.aaii) return;
+  e.preventDefault();
+  const N = D.aaii.history.dates.length, i = navIdx(e, svg, N), [s, t] = aaiiView();
+  const r = svg.getBoundingClientRect(), pxPerIdx = r.width / NAV.w * (NAV.w - NAV.pL - NAV.pR) / (N - 1);
+  const edge = 7 / pxPerIdx;           // 7 個螢幕像素內算抓到邊
+  let mode = 'select';
+  if (Math.abs(i - s) <= edge) mode = 'left';
+  else if (Math.abs(i - t) <= edge) mode = 'right';
+  else if (i > s && i < t) mode = 'pan';
+  navDrag = { svg, N, mode, i0: i, s, t, moved: false };
+  svg.setPointerCapture(e.pointerId);
+}
+function navMove(e) {
+  if (!navDrag) return;
+  const { svg, N, mode, i0, s, t } = navDrag, i = navIdx(e, svg, N);
+  if (Math.abs(i - i0) > 0.5) navDrag.moved = true;
+  if (!navDrag.moved) return;
+  if (mode === 'pan') setAaiiView(s + (i - i0), t + (i - i0));
+  else if (mode === 'left') setAaiiView(Math.min(i, t - MIN_WIN + 1), t);
+  else if (mode === 'right') setAaiiView(s, Math.max(i, s + MIN_WIN - 1));
+  else setAaiiView(Math.min(i0, i), Math.max(i0, i));
+}
+function navUp() {
+  if (!navDrag) return;
+  const { i0, s, t, moved, mode } = navDrag;
+  navDrag = null;
+  if (!moved && mode === 'select') {      // 點一下：把目前的視窗移到點的位置
+    const w = t - s;
+    setAaiiView(i0 - w / 2, i0 + w / 2);
+  }
+}
+function navWheel(e) {
+  const svg = e.target.closest && e.target.closest('#aaiiNav svg');
+  if (!svg || !D || !D.aaii) return;
+  e.preventDefault();
+  const N = D.aaii.history.dates.length, i = navIdx(e, svg, N), [s, t] = aaiiView();
+  const k = e.deltaY > 0 ? 1.25 : 0.8;   // 往下滾＝拉遠（看更長期間）
+  setAaiiView(i - (i - s) * k, i + (t - i) * k);
+}
+
+/* ---------- 資料來源異常 ---------- */
+function healthBlock() {
+  const items = (D.health || []).filter(h => !h.ok).map(h => `<li><b>${h.label}</b>：${h.msg}</li>`);
+  const ageH = (Date.now() - new Date(D.generated_at).getTime()) / 36e5;
+  if (ageH > 36) items.unshift(`<li><b>整體</b>：資料已 ${Math.floor(ageH)} 小時沒有更新（每日自動更新可能沒有執行或失敗）</li>`);
+  if (!items.length) return '';
+  return `<div class="card health">
+    <div class="ht">⚠ 部分資料可能不是最新</div>
+    <ul>${items.join('')}</ul>
+    <div class="hn">抓不到的來源會沿用上一次的資料，頁面其餘部分照常運作。</div>
   </div>`;
 }
 
@@ -385,13 +580,13 @@ function chartsBlock() {
   const sp = D.spread_bp;
   return `<div class="charts">
     <div class="card"><div class="chart-head"><span class="t">美元指數 DXY</span><span class="v num">${D.dxy[last].toFixed(2)}</span></div>
-      ${lineChart([{ data: D.dxy, color: 'var(--accent)' }], { fmt: v => v.toFixed(1), markFrom: mark })}
+      ${lineChart([{ data: D.dxy, color: 'var(--accent)', name: 'DXY' }], { fmt: v => v.toFixed(1), vfmt: v => v.toFixed(2), markFrom: mark })}
       <div class="legend"><span>藍底＝目前回看視窗</span></div></div>
     <div class="card"><div class="chart-head"><span class="t">2Y 與 10Y 殖利率</span><span class="v num">${D.y2[last].toFixed(2)}% / ${D.y10[last].toFixed(2)}%</span></div>
-      ${lineChart([{ data: D.y2, color: 'var(--q2)' }, { data: D.y10, color: 'var(--accent)' }], { fmt: v => v.toFixed(2) + '%', markFrom: mark })}
+      ${lineChart([{ data: D.y2, color: 'var(--q2)', name: '2 年期' }, { data: D.y10, color: 'var(--accent)', name: '10 年期' }], { fmt: v => v.toFixed(2) + '%', markFrom: mark })}
       <div class="legend"><span><i style="background:var(--q2)"></i>2 年期</span><span><i style="background:var(--accent)"></i>10 年期</span></div></div>
     <div class="card"><div class="chart-head"><span class="t">10Y−2Y 利差</span><span class="v num ${sp[last] >= 0 ? '' : 'neg'}">${sgn(sp[last], 0, ' bp')}</span></div>
-      ${lineChart([{ data: sp, color: 'var(--q3)' }], { fmt: v => Math.round(v) + 'bp', zero: true, markFrom: mark })}
+      ${lineChart([{ data: sp, color: 'var(--q3)', name: '10Y−2Y' }], { fmt: v => Math.round(v) + 'bp', vfmt: v => sgn(v, 0, ' bp'), zero: true, markFrom: mark })}
       <div class="legend"><span>上升＝變陡、下降＝變平；低於 0 為倒掛</span></div></div>
   </div>`;
 }
@@ -471,11 +666,14 @@ function render() {
   document.getElementById('subtitle').innerHTML =
     `美元指數 × 美債殖利率曲線 → 流動性象限 · 散戶情緒 · 資料至 <b>${ymd(D.dates[D.dates.length - 1])}</b> · 更新於 ${new Date(D.generated_at).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
   document.getElementById('app').innerHTML =
-    signalBlock(cur) +
+    healthBlock() + signalBlock(cur) +
     `<div class="grid-2">${regimeCard(cur)}${matrixCard(cur)}</div>` +
     chartsBlock() + stripBlock() +
     `<div class="grid-2">${fitBlock(cur)}<div class="stack">${fgBlock()}${aaiiBlock()}</div></div>`;
+  drawAaii();
   document.getElementById('provenance').innerHTML =
+    (D.health ? `<div>資料來源狀態：${D.health.map(h =>
+      `<span class="${h.ok ? 'src-ok' : 'src-bad'}">${h.ok ? '✓' : '⚠'}</span> ${h.label} ${h.latest ? md(h.latest) : '—'}`).join(' · ')}</div>` : '') +
     `資料來源：2Y／10Y＝${D.sources.yields}；DXY＝${D.sources.dxy}；驗證資產＝${D.sources.assets}；情緒＝${D.sources.sentiment}、${D.sources.aaii || 'AAII'}（S&P 500＝${D.sources.spx || 'Yahoo'}）。` +
     `象限由 <code>regime.py</code> 計算（參數版本 <code>${D.param_version}</code>，死區：1 個月 DXY ±${D.params.LOOKBACKS['20'].dxy_pct}%／利差 ±${D.params.LOOKBACKS['20'].spread_bp}bp；3 個月 ±${D.params.LOOKBACKS['60'].dxy_pct}%／±${D.params.LOOKBACKS['60'].spread_bp}bp）。`;
 }
@@ -485,6 +683,16 @@ document.getElementById('lbSeg').addEventListener('click', e => {
   LB = b.dataset.lb; localStorageSet('lb', LB); render();
 });
 document.getElementById('refreshBtn').addEventListener('click', load);
+document.addEventListener('pointermove', e => { navMove(e); if (!navDrag) chartHover(e); });
+document.addEventListener('pointerdown', e => { chartHover(e); navDown(e); });
+document.addEventListener('pointerup', navUp);
+document.addEventListener('pointercancel', () => { navDrag = null; });
+document.addEventListener('wheel', navWheel, { passive: false });
+document.addEventListener('click', e => {
+  const b = e.target.closest('#aaiiRange button'); if (!b || !D || !D.aaii) return;
+  const N = D.aaii.history.dates.length, k = +b.dataset.k;
+  setAaiiView(k ? N - Math.min(k, N) : 0, N - 1);
+});
 load();
 </script>
 </body>

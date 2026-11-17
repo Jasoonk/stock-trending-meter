@@ -28,7 +28,6 @@ BANDS = [
     (100, "極度樂觀", "散戶看多程度在歷史最高 10%。傳統上視為反向偏空訊號，但多頭中可以持續很久。"),
 ]
 FWD_WEEKS = 26          # 前瞻報酬：26 週 ≈ 6 個月（剛好是問卷問的期間）
-HISTORY_WEEKS = 104     # 匯出給前端畫圖的週數（約兩年）
 
 MONTHS = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
@@ -134,7 +133,7 @@ def summarize(rows, spx):
             }
 
     r1 = lambda v: round(v * 100, 1)
-    hist = rows[-HISTORY_WEEKS:]
+    hist = rows          # 全部歷史（前端可縮放，預設顯示近兩年）
     ma8 = st.mean(b for _, b, _, _ in rows[-8:])
     pd, pb, pn, pr = rows[-2]
     return {

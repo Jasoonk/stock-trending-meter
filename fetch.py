@@ -19,6 +19,7 @@
     日期為準（與 UUP 日變動相關 0.83，已驗證）。
 """
 
+import os
 import sys
 import csv
 import io
@@ -144,7 +145,9 @@ def fetch_aaii(today):
         page = http_get(aaii.SENT_URL, {"User-Agent": UA, "Accept": "text/html"}).decode("utf-8", "replace")
         rows = aaii.parse_sent_results(page, today)
         if not rows:
-            print("  ! AAII 網頁格式改變，解析不到表格（略過，保留資料庫既有資料）")
+            why = ("被 AAII 的防爬機制擋下" if "Pardon Our Interruption" in page
+                   else "網頁格式改變，解析不到表格")
+            print(f"  ! AAII {why}（略過，保留資料庫既有資料）")
         return rows
     except Exception as e:
         print(f"  ! AAII 抓取失敗（略過，保留資料庫既有資料）：{e}")
@@ -206,6 +209,32 @@ def ffill_lookup(series):
 
 
 # --------------------------------------------------------------------------- #
+# 資料來源健康檢查：抓失敗不中斷（保留舊資料），但要讓人看得到
+#   - GitHub Actions：輸出 ::warning::（執行頁面出現黃色警告）＋ 執行摘要表格
+#   - data.json 的 health → 儀表板頂端黃色橫幅
+# --------------------------------------------------------------------------- #
+def days_old(latest, today):
+    return (today - datetime.date.fromisoformat(latest)).days if latest else None
+
+
+def report_health(health):
+    warns = [h for h in health if not h["ok"]]
+    if os.environ.get("GITHUB_ACTIONS"):
+        for h in warns:
+            print(f"::warning title=資料來源異常：{h['label']}::{h['msg']}")
+        path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if path:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("### 資料來源狀態\n\n| 來源 | 狀態 | 最新資料 | 說明 |\n|---|---|---|---|\n")
+                for h in health:
+                    f.write(f"| {h['label']} | {'✅' if h['ok'] else '⚠️'} | {h['latest'] or '—'} | {h['msg']} |\n")
+    if warns:
+        print(f"⚠ {len(warns)} 個資料來源異常：" + "；".join(f"{h['label']}（{h['msg']}）" for h in warns))
+    else:
+        print("✓ 所有資料來源正常")
+
+
+# --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
 def main():
@@ -232,8 +261,11 @@ def main():
         init_db(conn)
         # 存入新抓到的資料（抓失敗時保留舊資料，不覆蓋）
         dxy_f = ffill_lookup(dxy) if dxy else None
+        # DXY 這次沒抓到時保留資料庫原值（不可用 None 蓋掉）
         for d, (y2, y10) in tsy.items():
-            conn.execute("INSERT OR REPLACE INTO macro_daily (date,dxy,y2,y10) VALUES (?,?,?,?)",
+            conn.execute("INSERT INTO macro_daily (date,dxy,y2,y10) VALUES (?,?,?,?) "
+                         "ON CONFLICT(date) DO UPDATE SET y2=excluded.y2, y10=excluded.y10, "
+                         "dxy=COALESCE(excluded.dxy, macro_daily.dxy)",
                          (d, dxy_f(d) if dxy_f else None, y2, y10))
         for sym, ser in assets.items():
             conn.executemany("INSERT OR REPLACE INTO asset_daily (symbol,date,close) VALUES (?,?,?)",
@@ -253,6 +285,34 @@ def main():
             conn.execute("INSERT OR REPLACE INTO market_indicators (indicator,timestamp,score,rating) "
                          "VALUES (?,?,?,?)", ("cnn_fear_greed", today.isoformat(), fg["score"], fg["rating"]))
         conn.commit()
+
+        # 健康檢查：這次有沒有抓到 + 資料庫裡最新一筆有多舊
+        q1 = lambda sql, *a: conn.execute(sql, a).fetchone()[0]
+        tsy_latest = q1("SELECT MAX(date) FROM macro_daily WHERE y2 IS NOT NULL")
+        aaii_latest = q1("SELECT MAX(date) FROM aaii_weekly")
+        got = sum(1 for v in assets.values() if v)
+        health = []
+
+        def chk(key, label, fetched, latest, max_age, fail_msg):
+            age = days_old(latest, today)
+            if not fetched:
+                ok, msg = False, fail_msg + (f"，沿用 {latest} 的舊資料" if latest else "")
+            elif age is not None and age > max_age:
+                ok, msg = False, f"有連線但最新資料停在 {latest}（{age} 天前）"
+            else:
+                ok, msg = True, "正常"
+            health.append({"key": key, "label": label, "ok": ok, "latest": latest, "msg": msg})
+
+        chk("treasury", "美國財政部 2Y／10Y", bool(tsy), tsy_latest, 5, "抓取失敗（可能被擋）")
+        chk("dxy", "DXY（Yahoo）", bool(dxy), max(dxy) if dxy else None, 5, "抓取失敗（可能被擋）")
+        chk("assets", "驗證資產（Yahoo）", got == len(rg.ASSETS),
+            max((max(v) for v in assets.values() if v), default=None), 5,
+            f"只取得 {got}/{len(rg.ASSETS)} 檔")
+        chk("cnn", "CNN 恐慌貪婪", fg is not None, today.isoformat() if fg else None, 5,
+            "抓取失敗（可能被擋），本次頁面不顯示")
+        chk("aaii", "AAII 散戶情緒", bool(aaii_rows), aaii_latest, 10, "抓取失敗（可能被擋）")
+        chk("spx", "S&P 500（Yahoo）", bool(spx), max(spx) if spx else None, 5, "抓取失敗（可能被擋）")
+        report_health(health)
 
         rows = conn.execute("SELECT date,dxy,y2,y10 FROM macro_daily "
                             "WHERE dxy IS NOT NULL AND y2 IS NOT NULL AND y10 IS NOT NULL "
@@ -358,8 +418,9 @@ def main():
         "assets": [{"symbol": s, "label": l} for s, l in rg.ASSETS],
         "market": {"fear_greed": fg} if fg else {},
         "aaii": sentiment,
+        "health": health,
     }
-    OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
     for lb_s, c in current.items():
         q = rg.QUADRANTS[c["q"]]
