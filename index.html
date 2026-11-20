@@ -133,6 +133,8 @@
   .fg-stats { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0; }
   .fg-stat .l { font-size: 11px; color: var(--text-faint); }
   .fg-stat .v { font-size: 15px; font-weight: 700; }
+  .fg-trend { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .fg-trend-h { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 2px; }
   @media (max-width: 520px) { .fg { flex-direction: column; align-items: stretch; } .fg-gauge { flex: none; margin: 0 auto; } }
 
   /* AAII 散戶情緒 */
@@ -238,13 +240,16 @@ function lineChart(series, opt) {
   const w = opt.w || 380, h = opt.h || 170, pL = 38, pR = 8, pT = 10, pB = 22;
   const iw = w - pL - pR, ih = h - pT - pB;
   const all = series.flatMap(s => s.data).concat(opt.zero ? [0] : []);
-  let lo = Math.min(...all), hi = Math.max(...all);
-  const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+  let lo = Math.min(...all), hi = Math.max(...all), pad = (hi - lo) * 0.08 || 1;
+  if (opt.range) { [lo, hi] = opt.range; pad = 0; } else { lo -= pad; hi += pad; }
   const n = series[0].data.length;
   const x = i => pL + (i / (n - 1)) * iw;
   const y = v => pT + ih - ((v - lo) / (hi - lo)) * ih;
   const ticks = [hi - pad, (hi + lo) / 2, lo + pad];
   let svg = '';
+  (opt.bands || []).forEach(b => {      // 水平色帶（例如恐慌／貪婪區）
+    svg += `<rect x="${pL}" y="${y(b.to).toFixed(1)}" width="${iw}" height="${(y(b.from) - y(b.to)).toFixed(1)}" fill="${b.color}" opacity="${b.op || .08}"/>`;
+  });
   ticks.forEach(t => {
     svg += `<line x1="${pL}" x2="${w - pR}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="var(--border)" stroke-dasharray="2 4"/>`;
     svg += `<text x="${pL - 5}" y="${(y(t) + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--text-faint)">${opt.fmt(t)}</text>`;
@@ -667,8 +672,20 @@ function fgBlock() {
         <div style="font-size:18px;font-weight:800;color:${fgCol(fg.score)}">${RAT_ZH[fg.rating] || fg.rating}</div>
         <div class="fg-stats">${st('前收', fg.previous_close)}${st('上週', fg.previous_1_week)}${st('上月', fg.previous_1_month)}${st('去年', fg.previous_1_year)}</div>
       </div></div>
+    ${fgTrend(fg)}
   </div>`;
 }
+function fgTrend(fg) {
+  const h = (fg.history || []).filter(p => p.d);
+  if (h.length < 5) return '';
+  const zones = [[0, 25, '#f85149'], [25, 45, '#f0883e'], [45, 55, '#d29922'], [55, 75, '#3fb950'], [75, 100, '#2ea043']];
+  return `<div class="fg-trend"><div class="fg-trend-h">近 30 天走勢 <span class="dim">· 每日收盤</span></div>` +
+    lineChart([{ data: h.map(p => p.y), color: 'var(--text)', name: '恐慌貪婪' }],
+      { id: 'fg', w: 420, h: 150, range: [0, 100], dates: h.map(p => p.d), fmt: v => Math.round(v),
+        vfmt: v => `${Math.round(v)}（${RAT_ZH[fgRating(v)]}）`,
+        bands: zones.map(([from, to, color]) => ({ from, to, color, op: .1 })) }) + `</div>`;
+}
+const fgRating = v => v < 25 ? 'extreme fear' : v < 45 ? 'fear' : v <= 55 ? 'neutral' : v <= 75 ? 'greed' : 'extreme greed';
 
 /* 市場情緒（左）＋ 散戶情緒讀數（右）；只有一張時佔整排 */
 function sentimentRow() {

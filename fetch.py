@@ -129,11 +129,19 @@ def fetch_fear_greed():
             return None
         hist = (d.get("fear_and_greed_historical") or {}).get("data", [])
         r1 = lambda v: round(float(v), 1) if v is not None else None
+        # 每日一筆（同一天有收盤點與盤中即時點時取最後一筆），只留近 30 天給前端畫走勢
+        by_day = {}
+        for p in hist:
+            day = datetime.datetime.fromtimestamp(float(p["x"]) / 1000, datetime.timezone.utc).date()
+            by_day[day] = round(float(p["y"]), 1)
+        if by_day:
+            cut = max(by_day) - datetime.timedelta(days=30)
+            by_day = {d: v for d, v in by_day.items() if d >= cut}
         return {
             "score": r1(fg["score"]), "rating": fg.get("rating"), "timestamp": fg.get("timestamp"),
             "previous_close": r1(fg.get("previous_close")), "previous_1_week": r1(fg.get("previous_1_week")),
             "previous_1_month": r1(fg.get("previous_1_month")), "previous_1_year": r1(fg.get("previous_1_year")),
-            "history": [{"t": int(p["x"]), "y": round(float(p["y"]), 1)} for p in hist[-30:]],
+            "history": [{"d": d.isoformat(), "y": v} for d, v in sorted(by_day.items())],
         }
     except Exception as e:
         print(f"  ! CNN 恐慌貪婪指數抓取失敗（略過）：{e}")
