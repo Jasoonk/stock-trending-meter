@@ -133,6 +133,18 @@
   .fg-stats { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0; }
   .fg-stat .l { font-size: 11px; color: var(--text-faint); }
   .fg-stat .v { font-size: 15px; font-weight: 700; }
+  .sd-top { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 4px 0; }
+  .sd-num { background: var(--panel-2); border-radius: 8px; padding: 8px 12px; }
+  .sd-num .l { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+  .sd-num .l i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+  .sd-num .v { font-size: 24px; font-weight: 800; }
+  .sd-num .s { font-size: 12px; color: var(--text-faint); }
+  @media (max-width: 520px) {
+    .sd-top { gap: 6px; }
+    .sd-num { padding: 6px 8px; }
+    .sd-num .v { font-size: 20px; }
+    .sd-num .l, .sd-num .s { font-size: 11px; }
+  }
   .fg-trend { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
   .fg-trend-h { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 2px; }
   @media (max-width: 520px) { .fg { flex-direction: column; align-items: stretch; } .fg-gauge { flex: none; margin: 0 auto; } }
@@ -388,6 +400,65 @@ function aaiiChartBlock() {
     <div class="legend"><span><i style="background:var(--pos)"></i>看多</span><span><i style="background:var(--neg)"></i>看空</span><span>虛線＝1987 年以來平均</span>
       <span>下方時間線：拖曳選範圍 · 拖曳框框平移 · 拉兩側調寬窄 · 滾輪縮放</span></div>
   </div>`;
+}
+
+/* ---------- 聰明錢／傻錢信心（CFTC 持倉近似版） ---------- */
+const SD_PRESETS = [[52, '1 年'], [156, '3 年'], [260, '5 年'], [520, '10 年'], [0, '全部']];
+const SD_COL = { smart: 'var(--accent)', dumb: '#f0883e' };
+let SDW = 156;                          // 顯示最近幾週；0＝全部
+function smartDumbBlock() {
+  const s = D.smart_dumb;
+  if (!s) return '';
+  const lvl = v => v >= 80 ? '高度樂觀' : v <= 20 ? '高度悲觀' : v >= 60 ? '偏樂觀' : v <= 40 ? '偏悲觀' : '中性';
+  const chg = (v, p) => v === p ? '<span class="dim">持平</span>' : `${v > p ? '▲' : '▼'}${Math.abs(v - p)}`;
+  const br = s.base_rate;
+  let brTxt = '';
+  if (br) {
+    const dm = br.band.median - br.all.median, dp = br.band.pos - br.all.pos;
+    const verdict = Math.abs(dp) < 0.05 && Math.abs(dm) < 0.015
+      ? '<b>跟平常沒有明顯差別</b>——這個近似版在目前這個區間沒有預測力。'
+      : `上漲機率${dp >= 0 ? '高' : '低'}於平常 ${Math.abs(dp * 100).toFixed(0)} 個百分點、中位數${dm >= 0 ? '多' : '少'} ${Math.abs(dm * 100).toFixed(1)} 個百分點。`;
+    brTxt = `<div class="baserate">📊 <b>歷史對照：</b>${s.since.slice(0, 4)} 年以來落在「${s.band}」的 <b>${br.band.n}</b> 週，S&P 500 之後 ${br.weeks} 週報酬中位數
+      <b class="${br.band.median >= 0 ? 'pos' : 'neg'}">${pct(br.band.median)}</b>、上漲機率 <b>${(br.band.pos * 100).toFixed(0)}%</b>；
+      全部週為 ${pct(br.all.median)}、${(br.all.pos * 100).toFixed(0)}%。${verdict}
+      <div class="dim" style="font-size:11px;margin-top:3px">整體回測：聰明錢明顯較樂觀（差距 ≥ 50）的週，之後 26 週表現反而略差於平常——這個近似版<b>沒有</b>原版宣稱的反向指標效果，只能當背景參考。</div></div>`;
+  }
+  return `<div class="card row">
+    <h2>聰明錢 vs 傻錢信心 <small>近似版：CFTC 期貨持倉（E-mini S&P 500），不是 SentimenTrader 原版 · 部位日 ${ymd(s.date)}</small></h2>
+    <div class="sd-top">
+      <div class="sd-num"><div class="l"><i style="background:${SD_COL.smart}"></i>聰明錢信心</div>
+        <div class="v num" style="color:${SD_COL.smart}">${s.smart}%</div><div class="s">${lvl(s.smart)} · 週 ${chg(s.smart, s.prev.smart)}</div></div>
+      <div class="sd-num"><div class="l"><i style="background:${SD_COL.dumb}"></i>傻錢信心</div>
+        <div class="v num" style="color:${SD_COL.dumb}">${s.dumb}%</div><div class="s">${lvl(s.dumb)} · 週 ${chg(s.dumb, s.prev.dumb)}</div></div>
+      <div class="sd-num"><div class="l">差距（聰明−傻）</div>
+        <div class="v num">${sgn(s.spread)}</div><div class="s">${s.band}</div></div>
+    </div>
+    <div class="note" style="margin:4px 0 6px">聰明錢＝避險機構（商業持有人）淨部位 ${sgn(s.comm_net_pct, 1, '%')}、傻錢＝小額交易人淨部位 ${sgn(s.small_net_pct, 1, '%')}（佔未平倉量），
+      各自換算成「近 ${s.window_weeks / 52} 年區間內的位置」：100% 代表 3 年來最偏多、0% 最偏空。原版的經典讀法是兩者背離到極端時，跟著聰明錢、反著傻錢。</div>
+    ${brTxt}
+    <div class="zoom-bar">
+      <div class="seg sm" id="sdRange">${SD_PRESETS.map(([k, l]) => `<button data-k="${k}">${l}</button>`).join('')}</div>
+      <span class="zoom-lbl num" id="sdRangeLbl"></span>
+    </div>
+    <div id="sdChart"></div>
+    <div class="legend"><span><i style="background:${SD_COL.smart}"></i>聰明錢信心</span><span><i style="background:${SD_COL.dumb}"></i>傻錢信心</span>
+      <span>每週一筆（週二部位、週五公布）· 上下色帶＝80% 以上／20% 以下</span></div>
+  </div>`;
+}
+function drawSmartDumb() {
+  const el = document.getElementById('sdChart');
+  if (!el) return;
+  const h = D.smart_dumb.history, N = h.dates.length, s = SDW ? Math.max(0, N - SDW) : 0;
+  const sl = a => a.slice(s), span = N - s;
+  el.innerHTML = lineChart(
+    [{ data: sl(h.smart), color: SD_COL.smart, name: '聰明錢' }, { data: sl(h.dumb), color: SD_COL.dumb, name: '傻錢' }],
+    { id: 'sd', w: NAV.w, h: NAV.w > 400 ? 230 : 180, range: [0, 100], dates: sl(h.dates),
+      fmt: v => Math.round(v) + '%', vfmt: v => v + '%',
+      xfmt: span > 520 ? (d => d.slice(0, 4)) : (d => d.slice(0, 7).replace('-', '/')),
+      bands: [{ from: 80, to: 100, color: 'var(--pos)' }, { from: 0, to: 20, color: 'var(--neg)' }],
+      extra: i => { const v = h.smart[s + i] - h.dumb[s + i]; return `<div>差距 <b>${sgn(v)}</b></div>`; } });
+  document.getElementById('sdRangeLbl').textContent = `${ymd(h.dates[s]).slice(0, 7)} – ${ymd(h.dates[N - 1]).slice(0, 7)}（${span} 週）`;
+  document.querySelectorAll('#sdRange button').forEach(b => b.classList.toggle('active', +b.dataset.k === SDW));
 }
 
 /* ---------- AAII 可縮放時間軸 ---------- */
@@ -701,15 +772,16 @@ function render() {
     `美元指數 × 美債殖利率曲線 → 流動性象限 · 散戶情緒 · 資料至 <b>${ymd(D.dates[D.dates.length - 1])}</b> · 更新於 ${new Date(D.generated_at).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
   NAV.w = window.innerWidth < 600 ? 380 : 900;   // 整頁寬用寬比例；手機用窄比例，字才不會縮太小
   document.getElementById('app').innerHTML =
-    healthBlock() + sentimentRow() + aaiiChartBlock() + signalBlock(cur) +
+    healthBlock() + sentimentRow() + aaiiChartBlock() + smartDumbBlock() + signalBlock(cur) +
     `<div class="grid-2">${regimeCard(cur)}${matrixCard(cur)}</div>` +
     chartsBlock() + stripBlock() +
     `<div class="row">${fitBlock(cur)}</div>`;
   drawAaii();
+  drawSmartDumb();
   document.getElementById('provenance').innerHTML =
     (D.health ? `<div>資料來源狀態：${D.health.map(h =>
       `<span class="${h.ok ? 'src-ok' : 'src-bad'}">${h.ok ? '✓' : '⚠'}</span> ${h.label} ${h.latest ? md(h.latest) : '—'}`).join(' · ')}</div>` : '') +
-    `資料來源：2Y／10Y＝${D.sources.yields}；DXY＝${D.sources.dxy}；驗證資產＝${D.sources.assets}；情緒＝${D.sources.sentiment}、${D.sources.aaii || 'AAII'}（S&P 500＝${D.sources.spx || 'Yahoo'}）。` +
+    `資料來源：2Y／10Y＝${D.sources.yields}；DXY＝${D.sources.dxy}；驗證資產＝${D.sources.assets}；情緒＝${D.sources.sentiment}、${D.sources.aaii || 'AAII'}（S&P 500＝${D.sources.spx || 'Yahoo'}）${D.sources.cot ? `；聰明錢／傻錢近似版＝${D.sources.cot}` : ''}。` +
     `象限由 <code>regime.py</code> 計算（參數版本 <code>${D.param_version}</code>，死區：1 個月 DXY ±${D.params.LOOKBACKS['20'].dxy_pct}%／利差 ±${D.params.LOOKBACKS['20'].spread_bp}bp；3 個月 ±${D.params.LOOKBACKS['60'].dxy_pct}%／±${D.params.LOOKBACKS['60'].spread_bp}bp）。`;
 }
 
@@ -732,6 +804,8 @@ document.addEventListener('pointerup', navUp);
 document.addEventListener('pointercancel', () => { navDrag = null; });
 document.addEventListener('wheel', navWheel, { passive: false });
 document.addEventListener('click', e => {
+  const sb = e.target.closest('#sdRange button');
+  if (sb && D && D.smart_dumb) { SDW = +sb.dataset.k; drawSmartDumb(); return; }
   const b = e.target.closest('#aaiiRange button'); if (!b || !D || !D.aaii) return;
   const N = D.aaii.history.dates.length, k = +b.dataset.k;
   setAaiiView(k ? N - Math.min(k, N) : 0, N - 1);

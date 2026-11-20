@@ -7,6 +7,7 @@
   CNN                         → 恐慌貪婪指數
   AAII                        → 每週散戶看多／看空調查（歷史由 backfill_aaii.py 灌入）
   Yahoo ^GSPC                 → 每個 AAII 週的 S&P 500 收盤（算各情緒區間之後的報酬）
+  CFTC COT                    → E-mini S&P 500 持倉 → 聰明錢／傻錢信心「近似版」
         → macro.db（每日序列 + 象限歷史）
         → data.json（前端只負責顯示）
 
@@ -33,6 +34,7 @@ from pathlib import Path
 
 import regime as rg
 import aaii
+import cot
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -191,6 +193,11 @@ def init_db(conn):
             source TEXT,                    -- xls（官方歷史檔）或 web（每週網頁）
             spx_close REAL                  -- 該週四（或之前最近交易日）S&P 500 收盤
         );
+        CREATE TABLE IF NOT EXISTS cot_weekly (
+            date TEXT PRIMARY KEY,          -- 部位日（週二）
+            oi REAL, comm_long REAL, comm_short REAL,   -- 商業（避險）機構
+            small_long REAL, small_short REAL           -- 未達申報門檻（小額交易人）
+        );
         CREATE TABLE IF NOT EXISTS param_versions (
             version TEXT PRIMARY KEY, config_json TEXT NOT NULL, first_used TEXT NOT NULL
         );
@@ -267,6 +274,17 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     try:
         init_db(conn)
+        # CFTC 持倉：資料庫是空的就抓全部（1997 起，約 0.4MB），否則只抓近 8 週（含修正）
+        cot_latest0 = conn.execute("SELECT MAX(date) FROM cot_weekly").fetchone()[0]
+        try:
+            since = (datetime.date.fromisoformat(cot_latest0) - datetime.timedelta(weeks=8)).isoformat()                 if cot_latest0 else None
+            cot_rows = cot.fetch(http_get, since)
+            print(f"  · CFTC 持倉：{len(cot_rows)} 週" + (f"（最新 {cot_rows[-1][0]}）" if cot_rows else ""))
+        except Exception as e:
+            cot_rows = []
+            print(f"  ! CFTC 持倉抓取失敗（略過，保留資料庫既有資料）：{e}")
+        conn.executemany("INSERT OR REPLACE INTO cot_weekly (date,oi,comm_long,comm_short,small_long,small_short) "
+                         "VALUES (?,?,?,?,?,?)", cot_rows)
         # 存入新抓到的資料（抓失敗時保留舊資料，不覆蓋）
         dxy_f = ffill_lookup(dxy) if dxy else None
         # DXY 這次沒抓到時保留資料庫原值（不可用 None 蓋掉）
@@ -298,6 +316,7 @@ def main():
         q1 = lambda sql, *a: conn.execute(sql, a).fetchone()[0]
         tsy_latest = q1("SELECT MAX(date) FROM macro_daily WHERE y2 IS NOT NULL")
         aaii_latest = q1("SELECT MAX(date) FROM aaii_weekly")
+        cot_latest = q1("SELECT MAX(date) FROM cot_weekly")
         got = sum(1 for v in assets.values() if v)
         health = []
 
@@ -319,6 +338,8 @@ def main():
         chk("cnn", "CNN 恐慌貪婪", fg is not None, today.isoformat() if fg else None, 5,
             "抓取失敗（可能被擋），本次頁面不顯示")
         chk("aaii", "AAII 散戶情緒", bool(aaii_rows), aaii_latest, 10, "抓取失敗（可能被擋）")
+        # COT：週二的部位要到週五才公布，正常情況最新一筆最多約 10 天前
+        chk("cot", "CFTC 期貨持倉", bool(cot_rows), cot_latest, 12, "抓取失敗")
         chk("spx", "S&P 500（Yahoo）", bool(spx), max(spx) if spx else None, 5, "抓取失敗（可能被擋）")
         report_health(health)
 
@@ -343,6 +364,10 @@ def main():
         spx_wk = dict(conn.execute("SELECT date,spx_close FROM aaii_weekly "
                                    "WHERE spx_close IS NOT NULL").fetchall())
         sentiment = aaii.summarize(aaii_hist, ffill_lookup(spx_wk) if spx_wk else None)
+        smart_dumb = cot.summarize(
+            conn.execute("SELECT date,oi,comm_long,comm_short,small_long,small_short FROM cot_weekly "
+                         "ORDER BY date").fetchall(),
+            ffill_lookup(spx_wk) if spx_wk else None)
 
         dates = [r[0] for r in rows]
         dxys = [r[1] for r in rows]
@@ -416,7 +441,8 @@ def main():
         "param_version": ver, "params": rg.PARAMS,
         "sources": {"yields": "U.S. Treasury Daily Par Yield Curve", "dxy": "Yahoo DX-Y.NYB",
                     "assets": "Yahoo", "sentiment": "CNN Fear & Greed",
-                    "aaii": "AAII Investor Sentiment Survey", "spx": "Yahoo ^GSPC"},
+                    "aaii": "AAII Investor Sentiment Survey", "spx": "Yahoo ^GSPC",
+                    "cot": "CFTC Commitments of Traders（E-mini S&P 500）"},
         "dates": dates[start:],
         "dxy": [round(v, 3) for v in dxys[start:]],
         "y2": y2s[start:], "y10": y10s[start:],
@@ -426,6 +452,7 @@ def main():
         "assets": [{"symbol": s, "label": l} for s, l in rg.ASSETS],
         "market": {"fear_greed": fg} if fg else {},
         "aaii": sentiment,
+        "smart_dumb": smart_dumb,
         "health": health,
     }
     OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -442,6 +469,9 @@ def main():
         s = sentiment
         print(f"  · AAII {s['date']}：看多 {s['bull']}% 中立 {s['neutral']}% 看空 {s['bear']}%"
               f" | 利差 {s['spread']:+.1f}（第 {s['pct']:.0f} 百分位，{s['band']}）")
+    if smart_dumb:
+        s = smart_dumb
+        print(f"  · 聰明錢／傻錢（COT 近似）{s['date']}：聰明錢 {s['smart']}% 傻錢 {s['dumb']}% | {s['band']}")
     print(f"完成：{len(dates)} 個交易日 → data.json（顯示近 {len(dates) - start} 日，參數版本 {ver}）")
     return 0
 

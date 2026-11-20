@@ -31,6 +31,20 @@ AAII 每週四公布的調查：「未來 6 個月股市會漲、持平、還是
 
 情緒常被當反向指標，但「極度悲觀」常出現在下跌途中，不代表馬上見底。
 
+市場情緒卡（CNN 恐慌貪婪）下方附近 30 天的每日走勢。
+
+## 聰明錢 vs 傻錢信心（近似版）
+
+原版 Smart Money / Dumb Money Confidence 是 SentimenTrader 的**付費專有指標**（多項指標加權、配方不公開），
+沒有免費資料。這裡只用其中一個公開成分做近似（`cot.py`）：
+
+- 資料：CFTC 每週 Commitments of Traders（Legacy、Futures Only），E-mini S&P 500（代碼 13874A），1997 年起
+- 聰明錢 = 商業（避險）機構淨部位 ÷ 未平倉量；傻錢 = 未達申報門檻的小額交易人淨部位 ÷ 未平倉量
+- 各自換成「近 3 年（156 週）區間內的位置」0–100%（COT Index 標準作法）
+
+⚠️ **回測（1997 起）顯示這個近似版沒有原版宣稱的反向指標效果**：聰明錢明顯較樂觀（差距 ≥ 50）的週，
+S&P 500 之後 26 週報酬中位數 +4.1%，反而低於全部週的 +5.5%。頁面上一定附歷史對照，不可當成原版使用。
+
 ## 怎麼判斷
 
 - 方向 = 今天的值 對比 **N 個交易日前**。可切換 **1 個月（20 日）**或 **3 個月（60 日）**。
@@ -51,6 +65,7 @@ AAII 每週四公布的調查：「未來 6 個月股市會漲、持平、還是
 | 市場情緒 | CNN 恐慌貪婪指數 | 非官方端點，抓不到時自動隱藏 |
 | 散戶情緒 | AAII Investor Sentiment Survey | 每週抓官網表格（近 ~20 週）；1987 年起的歷史由 `backfill_aaii.py` 從官方 `sentiment.xls` 一次灌入 |
 | S&P 500 | Yahoo `^GSPC` | 只存每個 AAII 週的收盤，用來算歷史對照 |
+| 期貨持倉 | CFTC Public Reporting（Socrata API） | 官方、免金鑰；週二部位、週五公布。資料庫空的時抓全部歷史，之後每次只抓近 8 週 |
 
 ⚠️ **不要用 Yahoo 的 `2YY=F` 當 2Y 殖利率**：建置時發現它數值連續數週不變，是無成交的死合約。
 
@@ -60,9 +75,10 @@ AAII 每週四公布的調查：「未來 6 個月股市會漲、持平、還是
 |---|---|
 | `regime.py` | **象限分類器（單一真相）**、象限定義、資產預期、劇本檢驗。前端不重算，避免兩份實作漂移。 |
 | `aaii.py` | AAII 網頁解析、百分位區間、歷史對照統計。 |
+| `cot.py` | CFTC 持倉抓取、聰明錢／傻錢近似指數、歷史對照統計。 |
 | `fetch.py` | 抓資料 → `macro.db` → `data.json`。只用 Python 標準庫。 |
 | `backfill_aaii.py` | 一次性灌 AAII 歷史（需 `pip install xlrd`）。`macro.db` 已含歷史，平常不用跑。 |
-| `macro.db` | 每日序列（`macro_daily`、`asset_daily`）、象限歷史（`regime_history`，含 `param_version`）、恐慌貪婪、AAII 每週（`aaii_weekly`，含當週 S&P 500 收盤）。 |
+| `macro.db` | 每日序列（`macro_daily`、`asset_daily`）、象限歷史（`regime_history`，含 `param_version`）、恐慌貪婪、AAII 每週（`aaii_weekly`，含當週 S&P 500 收盤）、CFTC 持倉（`cot_weekly`）。 |
 | `index.html` | 單頁儀表板，只負責顯示 `data.json`。 |
 | `.github/workflows/update.yml` | 每日 13:00 UTC 自動抓取並 commit。 |
 
@@ -94,3 +110,4 @@ python -m http.server 8137
 本專案原本是「Reddit 注意力生命週期儀表板」（ApeWisdom 提及數 → 四階段分類、題材、散戶獲利代理）。
 2026-11-16 改為總經流動性象限，論壇相關功能與 `attention.db` 已移除；需要時可從 git 歷史取回。
 2026-11-17 更名「美股儀表板」，加入 AAII 散戶情緒。
+2026-11-20 加入恐慌貪婪 30 天走勢、聰明錢／傻錢信心近似版（CFTC 持倉）。
